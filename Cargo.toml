@@ -1,0 +1,10 @@
+[package]
+name = "nsh-text-to-speech"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "Read text aloud on desktop and mobile."
+repository = "https://github.com/SuperNSH/text-to-speech"
+publish = false
+
+[dependencies]
