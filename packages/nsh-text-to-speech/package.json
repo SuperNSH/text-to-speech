@@ -1,0 +1,18 @@
+{
+  "name": "nsh-text-to-speech",
+  "version": "0.1.0",
+  "description": "Read text aloud in Native Shell TSX apps, with flutter_tts's and react-native-tts's names",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./rust": "./src/rust.ts",
+    "./memory": "./src/memory.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": "https://github.com/SuperNSH/text-to-speech"
+}

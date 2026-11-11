@@ -1,3 +1,4 @@
 target/
+.nsh/
 .DS_Store
-Cargo.lock
+.refs/

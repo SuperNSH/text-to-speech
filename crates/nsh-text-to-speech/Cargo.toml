@@ -1,0 +1,81 @@
+[package]
+name = "nsh-text-to-speech"
+description = "Read text aloud: speech synthesis for Native Shell apps, from AVSpeechSynthesizer and Android's TextToSpeech to Speech Dispatcher and the Web Speech API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "nsh_text_to_speech"
+path = "src/lib.rs"
+
+[dependencies]
+nsh-core = "0.4.0"
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+
+# Apple: AVSpeechSynthesizer.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSEnumerator",
+    "NSString",
+    "NSRunLoop",
+] }
+objc2-avf-audio = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "AVAudioBuffer",
+    "AVAudioFormat",
+    "AVAudioTypes",
+    "AVSpeechSynthesis",
+] }
+
+# Android: TextToSpeech over JNI. ndk-context carries the VM and the activity.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+ndk-context = "0.1"
+
+# Windows: Windows.Media.SpeechSynthesis, played through MediaPlayer into a stream.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Core",
+    "Media_Playback",
+    "Media_SpeechSynthesis",
+    "Storage_Streams",
+    "Win32_Foundation",
+] }
+
+# Linux: Speech Dispatcher over SSIP.
+[target.'cfg(target_os = "linux")'.dependencies]
+ssip-client-async = "0.19"
+# The backend relies on 0.5.0's Priority wire mapping.
+ssip = "=0.5.0"
+
+# Web: the Web Speech API.
+[target.wasm32-unknown-unknown.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "EventTarget",
+    "SpeechSynthesis",
+    "SpeechSynthesisErrorCode",
+    "SpeechSynthesisErrorEvent",
+    "SpeechSynthesisEvent",
+    "SpeechSynthesisUtterance",
+    "SpeechSynthesisVoice",
+    "Window",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = [
+    "rt",
+    "time",
+    "test-util",
+] }
