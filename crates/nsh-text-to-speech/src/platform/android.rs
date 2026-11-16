@@ -919,6 +919,9 @@ fn on_error(env: &mut Env, _this: JObject, utterance_id: JString) -> jni::errors
 }
 
 /// Bound with `RegisterNatives` against the `Bridge` dex; one entry per native method there.
+// jni 0.22.4's `native_method!` expands to the deprecated `AtomicBool::fetch_update`;
+// remove once jni-rs/jni-rs#846 ships in a release.
+#[allow(deprecated)]
 const BRIDGE_METHODS: &[NativeMethod] = &[
     native_method! { fn on_init(status: jint), },
     native_method! { fn on_start(utterance_id: JString), },
