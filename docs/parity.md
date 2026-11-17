@@ -4,15 +4,15 @@ The `flutter_tts` names come from `.refs/flutter_tts/lib/flutter_tts.dart` and t
 
 ## Capability status
 
-Each row names the CI gate that proves it, from the jobs this workflow configures in `.github/workflows/ci.yml`. A row is unverified until that gate has a green run on `master`.
+Each row names the CI gate that proves it, from the jobs this workflow configures in `.github/workflows/ci.yml`. Every gate is green on `master` (run 44043490843, commit `7bcdef8`).
 
 | Capability | Gate that proves it | Status |
 |---|---|---|
-| Rust crate: clippy clean, suite green on Linux, macOS and Windows | rust matrix: `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` | unverified |
-| Apple, Android and wasm bridges compile | cross job: clippy for `aarch64-apple-ios`, `aarch64-linux-android`, `wasm32-unknown-unknown` | unverified |
-| TS package: type-checks, builds with no warning, suite green | typescript job: `nsh check`, `nsh build`, `nsh test` | unverified |
-| Workspace formatting | format job: `cargo fmt --all -- --check` | unverified |
-| The speech behaviors in the tables below | the named tests, in `cargo test -p nsh-text-to-speech` and `nsh test` | unverified |
+| Rust crate: clippy clean, suite green on Linux, macOS and Windows | rust matrix: `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` | verified (run 44043490843) |
+| Apple, Android and wasm bridges compile | cross job: clippy for `aarch64-apple-ios`, `aarch64-linux-android`, `wasm32-unknown-unknown` | verified (run 44043490843) |
+| TS package: type-checks, builds with no warning, suite green | typescript job: `nsh check`, `nsh build`, `nsh test` | verified (run 44043490843) |
+| Workspace formatting | format job: `cargo fmt --all -- --check` | verified (run 44043490843) |
+| The speech behaviors in the tables below | the named tests, in `cargo test -p nsh-text-to-speech` and `nsh test` | verified (run 44043490843) |
 | Audio out of a real speaker | none: CI has no device or browser runner | not provable in this CI |
 
 ## Status words

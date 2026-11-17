@@ -30,7 +30,7 @@ Every compile and test runs in GitHub Actions. Nothing is built on a developer m
 - **cross**: clippy with `-D warnings` for `aarch64-apple-ios` on a macOS runner, and for `aarch64-linux-android` and `wasm32-unknown-unknown` on an ubuntu runner. Those targets are compile-checked only; CI has no device or browser runner, so the android and web mapping tests run nowhere in CI.
 - **typescript**: `nsh check`, then `nsh build` with the job failing on any warning, then `nsh test` for the package.
 
-The crate, the package and the four jobs above land in this same workflow. Until they are on `master` and the jobs have green runs there, every claim in this README is unverified, as `AGENTS.md` requires.
+All four jobs are green on `master` (run 44043490843, commit `7bcdef8`), so the claims above are verified.
 
 ## Licence
 
