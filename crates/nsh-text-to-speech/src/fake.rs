@@ -34,6 +34,8 @@ struct Pending {
 struct FakeState {
     init: Result<(), SpeechError>,
     available: Result<bool, SpeechError>,
+    pause: Result<(), SpeechError>,
+    resume: Result<(), SpeechError>,
     next_speak_error: Option<SpeechError>,
     pending: Option<Pending>,
     queue: VecDeque<Pending>,
@@ -74,6 +76,8 @@ impl FakeBackend {
             state: Arc::new(Mutex::new(FakeState {
                 init: Ok(()),
                 available: Ok(true),
+                pause: Ok(()),
+                resume: Ok(()),
                 next_speak_error: None,
                 pending: None,
                 queue: VecDeque::new(),
@@ -132,6 +136,16 @@ impl FakeBackend {
     /// Sets what `is_available` answers.
     pub fn set_available(&self, answer: Result<bool, SpeechError>) {
         self.lock().available = answer;
+    }
+
+    /// Sets what `pause` answers.
+    pub fn set_pause(&self, answer: Result<(), SpeechError>) {
+        self.lock().pause = answer;
+    }
+
+    /// Sets what `resume` answers.
+    pub fn set_resume(&self, answer: Result<(), SpeechError>) {
+        self.lock().resume = answer;
     }
 
     /// Makes the next `speak` fail to start with `error`, as a platform does when it cannot speak.
@@ -393,13 +407,21 @@ impl Backend for FakeBackend {
     }
 
     fn pause(&self) -> BackendFuture<'_, Result<(), SpeechError>> {
-        self.lock().pauses += 1;
-        Box::pin(ready(Ok(())))
+        let answer = {
+            let mut state = self.lock();
+            state.pauses += 1;
+            state.pause.clone()
+        };
+        Box::pin(ready(answer))
     }
 
     fn resume(&self) -> BackendFuture<'_, Result<(), SpeechError>> {
-        self.lock().resumes += 1;
-        Box::pin(ready(Ok(())))
+        let answer = {
+            let mut state = self.lock();
+            state.resumes += 1;
+            state.resume.clone()
+        };
+        Box::pin(ready(answer))
     }
 
     fn is_speaking(&self) -> BackendFuture<'_, Result<bool, SpeechError>> {

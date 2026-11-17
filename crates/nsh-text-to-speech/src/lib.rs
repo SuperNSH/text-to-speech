@@ -13,6 +13,7 @@ mod platform;
 mod speech;
 
 use nsh_core::prelude::*;
+use tokio::sync::mpsc;
 
 pub use backend::{Backend, BackendFuture, EventSink};
 pub use error::{ErrorKind, SpeechError};
@@ -216,15 +217,29 @@ impl NativeSpeech {
     ) {
         let speech = this.with(|native| native.speech.clone());
         // The sink is Send and may fire from a platform thread; the callback runs on the engine.
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        speech.set_event_handler(move |event| {
-            let _ = sender.send(to_native_event(event));
-        });
-        cx.start(async move {
-            while let Some(event) = receiver.recv().await {
-                handler.post(event);
-            }
-        });
+        let receiver = wire(&speech);
+        cx.start(deliver(receiver, move |event| handler.post(event)));
+    }
+}
+
+/// Lays the wire `set_event_handler` delivers through: the speech's sink sends each event,
+/// mapped, from whatever thread it fires on; the returned end drains what was sent.
+fn wire(speech: &Speech) -> mpsc::UnboundedReceiver<NativeUtteranceEvent> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    speech.set_event_handler(move |event| {
+        let _ = sender.send(to_native_event(event));
+    });
+    receiver
+}
+
+/// Hands the wired events to `post`, in order, until the speech's handler is replaced (the
+/// earlier wire's sender goes with it) or the speech itself goes.
+async fn deliver(
+    mut receiver: mpsc::UnboundedReceiver<NativeUtteranceEvent>,
+    post: impl Fn(NativeUtteranceEvent),
+) {
+    while let Some(event) = receiver.recv().await {
+        post(event);
     }
 }
 
@@ -557,6 +572,60 @@ mod tests {
             );
             let limit = NativeSpeech::max_speech_input_length(native).await.unwrap();
             assert_eq!(limit, Some(4000));
+        });
+    }
+
+    #[test]
+    fn wired_events_reach_their_post_in_order_until_replaced() {
+        let fake = FakeBackend::new();
+        let speech = Speech::with_backend(Box::new(fake.clone()));
+        let first = wire(&speech);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let into_seen = std::rc::Rc::clone(&seen);
+        run(async {
+            let delivery = tokio::task::spawn_local(deliver(first, move |event| {
+                into_seen.borrow_mut().push(event);
+            }));
+            speech.speak("Hello", false).await.unwrap();
+            assert!(fake.progress_utterance(2, 5));
+            assert!(fake.finish_utterance());
+            settle(|| seen.borrow().len() == 3).await;
+            // Replacing the handler takes the first wire down: its delivery ends on its own.
+            drop(wire(&speech));
+            settle(|| delivery.is_finished()).await;
+            assert!(delivery.await.is_ok());
+        });
+        let seen = seen.borrow();
+        assert_eq!(
+            seen.iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["start", "progress", "finish"]
+        );
+        assert!(seen.iter().all(|event| event.utterance_id == 1));
+        assert_eq!((seen[1].location, seen[1].length), (Some(2.0), Some(5.0)));
+    }
+
+    #[test]
+    fn the_native_module_registers_the_speech_class() {
+        let mut registry = Registry::new();
+        native(&mut registry);
+        // Registering it again keeps the one class, as a set merged twice does.
+        native(&mut registry);
+        let names: Vec<_> = registry
+            .class_specs()
+            .iter()
+            .map(|class| class.name)
+            .collect();
+        assert_eq!(names, ["NativeSpeech"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "the utterance never started")]
+    fn settle_fails_the_test_when_no_utterance_ever_starts() {
+        run(async {
+            // Nothing arrives within the bound: the guard fails the test, not time.
+            settle(|| false).await;
         });
     }
 

@@ -50,7 +50,6 @@ mod tests {
     use std::{future::Future, time::Duration};
 
     use super::*;
-    use crate::error::ErrorKind;
 
     fn run<F: Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
@@ -67,20 +66,38 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "android",
+        target_os = "windows",
+        target_os = "linux",
+        all(target_arch = "wasm32", target_os = "unknown")
+    ))]
     fn the_host_backend_settles_without_audio() {
-        let backend = match platform_backend() {
-            Ok(backend) => backend,
-            // A target with no speech service reports exactly that, coded, and settles.
-            Err(error) => {
-                assert_eq!(error.kind(), ErrorKind::NotAvailable);
-                return;
-            }
-        };
+        let backend = platform_backend().expect("this target has a backend");
         // Queries alone: neither plays audio, and both settle within the bound.
         let bound = Duration::from_secs(30);
         let available = run(async { tokio::time::timeout(bound, backend.is_available()).await });
         assert!(available.is_ok(), "is_available settles");
         let init = run(async { tokio::time::timeout(bound, backend.init()).await });
         assert!(init.is_ok(), "init settles");
+    }
+
+    #[test]
+    #[cfg(not(any(
+        target_vendor = "apple",
+        target_os = "android",
+        target_os = "windows",
+        target_os = "linux",
+        all(target_arch = "wasm32", target_os = "unknown")
+    )))]
+    fn a_target_without_speech_reports_not_available() {
+        use crate::error::ErrorKind;
+
+        // No speech service exists there at all: `Speech::new` says so, coded, and settles.
+        assert_eq!(
+            platform_backend().unwrap_err().kind(),
+            ErrorKind::NotAvailable
+        );
     }
 }

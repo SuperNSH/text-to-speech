@@ -249,9 +249,13 @@ struct Runtime {
     synthesizing: bool,
     /// The runtime's own command line, so a gathering thread can report its end.
     commands: Sender<Command>,
+    /// Tests force the synthesizer's answer; `None` asks the real one.
+    #[cfg(test)]
+    speaking_override: Option<bool>,
 }
 
 /// One synthesized buffer, in the engine's native sample type.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 enum Chunk {
     F32 {
         channels: u16,
@@ -286,7 +290,14 @@ impl NativeBackend {
 
     /// Sends one command and awaits its answer; a dead runtime settles the call either way.
     async fn request<T>(build: impl FnOnce(Reply<T>) -> Command) -> Result<T, SpeechError> {
-        let commands = Self::commands()?;
+        Self::ask(Self::commands()?, build).await
+    }
+
+    /// The same exchange over a given command line, so a runtime that dies is testable.
+    async fn ask<T>(
+        commands: &Sender<Command>,
+        build: impl FnOnce(Reply<T>) -> Command,
+    ) -> Result<T, SpeechError> {
         let (reply, answered) = oneshot::channel();
         commands.send(build(reply)).map_err(service_gone)?;
         answered.await.map_err(service_gone)?
@@ -472,6 +483,8 @@ impl Runtime {
                 registry,
                 synthesizing: false,
                 commands,
+                #[cfg(test)]
+                speaking_override: None,
             }
         }
     }
@@ -489,7 +502,7 @@ impl Runtime {
                 let id = self.next_id;
                 self.next_id += 1;
                 let pending = Pending { id, text, sink };
-                let running = unsafe { self.synth.isSpeaking() };
+                let running = self.speaking();
                 if interrupt && running {
                     // The cancel event frees the synthesizer; the interrupter waits in front.
                     unsafe {
@@ -524,17 +537,12 @@ impl Runtime {
                 let _ = reply.send(pause_answer(resumed));
             }
             Command::IsSpeaking { reply } => {
-                let speaking = unsafe { self.synth.isSpeaking() } || !self.queue.is_empty();
+                let speaking = self.speaking() || !self.queue.is_empty();
                 let _ = reply.send(Ok(speaking));
             }
             Command::Init { reply } => {
                 // SAFETY: a class-method query, safe from any thread.
-                let answer = if unsafe { system_voices() }.is_empty() {
-                    Err(SpeechError::new(ErrorKind::EngineMissing))
-                } else {
-                    Ok(())
-                };
-                let _ = reply.send(answer);
+                let _ = reply.send(init_answer(&unsafe { system_voices() }));
             }
             Command::Synthesize { text, reply } => {
                 self.start_synthesis(&text, reply);
@@ -595,12 +603,24 @@ impl Runtime {
 
     /// Starts the next queued utterance when the synthesizer is free.
     fn advance(&mut self) {
-        if unsafe { self.synth.isSpeaking() } {
+        if self.speaking() {
             return;
         }
         if let Some(pending) = self.queue.pop_front() {
             self.feed(pending);
         }
+    }
+
+    /// Whether the synthesizer itself is speaking; the queue is counted by the callers.
+    fn speaking(&self) -> bool {
+        #[cfg(test)]
+        {
+            if let Some(forced) = self.speaking_override {
+                return forced;
+            }
+        }
+        // SAFETY: a state query on the thread that owns the synthesizer.
+        unsafe { self.synth.isSpeaking() }
     }
 
     /// Registers the utterance, then hands it to the synthesizer, which retains it while
@@ -644,13 +664,7 @@ impl Runtime {
         // SAFETY: the utterance is built on this thread.
         let utterance = unsafe { build_utterance(&self.params, text) };
         let (chunks, assembled) = channel();
-        // The ObjC signature is void(^)(AVAudioBuffer*); AnyObject stands in for the buffer
-        // type, which the block never needs by name.
-        let block = RcBlock::new(move |buffer: NonNull<AnyObject>| {
-            // SAFETY: the buffer is valid for the call, and read_chunk checks its class.
-            let chunk = unsafe { read_chunk(buffer.as_ref()) };
-            let _ = chunks.send(chunk);
-        });
+        let block = chunk_block(chunks);
         let synth: &AVSpeechSynthesizer = &self.synth;
         // SAFETY: the selector was checked above, and AVFoundation copies the block for the
         // write's duration, so dropping ours below takes no live callback with it.
@@ -748,6 +762,15 @@ fn address(utterance: &AVSpeechUtterance) -> usize {
 
 fn lock<T>(held: &Mutex<T>) -> MutexGuard<'_, T> {
     held.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A system with no voice installed has no engine to speak with.
+fn init_answer(voices: &[Voice]) -> Result<(), SpeechError> {
+    if voices.is_empty() {
+        Err(SpeechError::new(ErrorKind::EngineMissing))
+    } else {
+        Ok(())
+    }
 }
 
 /// AVFoundation answers pause and resume with a boolean; false means the state did not hold.
@@ -874,6 +897,16 @@ unsafe fn build_utterance(params: &Parameters, text: &str) -> Retained<AVSpeechU
         }
         utterance
     }
+}
+
+/// The write's buffer callback: each buffer AVFoundation hands over becomes one chunk. The ObjC
+/// signature is void(^)(AVAudioBuffer*); AnyObject stands in for the buffer type.
+fn chunk_block(chunks: Sender<Chunk>) -> RcBlock<dyn Fn(NonNull<AnyObject>)> {
+    RcBlock::new(move |buffer: NonNull<AnyObject>| {
+        // SAFETY: the buffer is valid for the call, and read_chunk checks its class.
+        let chunk = unsafe { read_chunk(buffer.as_ref()) };
+        let _ = chunks.send(chunk);
+    })
 }
 
 /// Reads one synthesized buffer. The PCM buffer accessors run through `msg_send!`, written when
@@ -1089,6 +1122,7 @@ fn encode_wav(samples: &[i16], channels: u16, sample_rate: u32) -> Vec<u8> {
 mod tests {
     use std::{future::Future, sync::mpsc};
 
+    use objc2_avf_audio::{AVAudioCommonFormat, AVAudioFormat, AVAudioPCMBuffer};
     use tokio::time::timeout;
 
     use super::*;
@@ -1338,17 +1372,9 @@ mod tests {
         // SAFETY: an allocated utterance, never spoken; only its address is used.
         let utterance =
             unsafe { AVSpeechUtterance::speechUtteranceWithString(&NSString::from_str("x")) };
-        let seen: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen: Arc<Mutex<Vec<UtteranceEventKind>>> = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&seen);
-        let sink: EventSink = Box::new(move |event| {
-            recorded.lock().unwrap().push(match event.kind {
-                UtteranceEventKind::Start => "start",
-                UtteranceEventKind::Progress { .. } => "progress",
-                UtteranceEventKind::Finish => "finish",
-                UtteranceEventKind::Cancel => "cancel",
-                UtteranceEventKind::Error(_) => "error",
-            });
-        });
+        let sink: EventSink = Box::new(move |event| recorded.lock().unwrap().push(event.kind));
         lock(&registry).insert(
             address(&utterance),
             Active {
@@ -1386,7 +1412,17 @@ mod tests {
             UtteranceEventKind::Cancel,
             true,
         );
-        assert_eq!(*seen.lock().unwrap(), ["start", "progress", "finish"]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                UtteranceEventKind::Start,
+                UtteranceEventKind::Progress {
+                    location: 2,
+                    length: 5
+                },
+                UtteranceEventKind::Finish,
+            ]
+        );
     }
 
     #[test]
@@ -1469,17 +1505,9 @@ mod tests {
         // SAFETY: an allocated utterance, never spoken; only its address is used.
         let utterance =
             unsafe { AVSpeechUtterance::speechUtteranceWithString(&NSString::from_str("x")) };
-        let seen: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen: Arc<Mutex<Vec<UtteranceEventKind>>> = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&seen);
-        let sink: EventSink = Box::new(move |event| {
-            recorded.lock().unwrap().push(match event.kind {
-                UtteranceEventKind::Start => "start",
-                UtteranceEventKind::Progress { .. } => "progress",
-                UtteranceEventKind::Finish => "finish",
-                UtteranceEventKind::Cancel => "cancel",
-                UtteranceEventKind::Error(_) => "error",
-            });
-        });
+        let sink: EventSink = Box::new(move |event| recorded.lock().unwrap().push(event.kind));
         lock(&registry).insert(
             address(&utterance),
             Active {
@@ -1505,7 +1533,17 @@ mod tests {
             .unwrap();
         drop(events);
         dispatch(reported, Arc::clone(&registry), commands);
-        assert_eq!(*seen.lock().unwrap(), ["start", "progress", "finish"]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                UtteranceEventKind::Start,
+                UtteranceEventKind::Progress {
+                    location: 1,
+                    length: 1
+                },
+                UtteranceEventKind::Finish,
+            ]
+        );
         assert!(matches!(inbox.try_recv(), Ok(Command::Advance)));
         assert!(matches!(inbox.try_recv(), Ok(Command::Advance)));
         assert!(lock(&registry).is_empty());
@@ -1662,5 +1700,431 @@ mod tests {
                 "unexpected error: {error:?}"
             ),
         }
+    }
+
+    /// A non-interleaved PCM buffer of `frames` frames at 22.05 kHz. No speech session is
+    /// involved: the format and the buffer are plain AVFoundation allocations.
+    fn pcm_buffer(
+        common: AVAudioCommonFormat,
+        channels: u32,
+        frames: u32,
+    ) -> Retained<AVAudioPCMBuffer> {
+        // SAFETY: the format is PCM, so the buffer init raises nothing, and the length set
+        // stays inside the capacity.
+        unsafe {
+            let format = AVAudioFormat::initWithCommonFormat_sampleRate_channels_interleaved(
+                AVAudioFormat::alloc(),
+                common,
+                22050.0,
+                channels,
+                false,
+            )
+            .expect("a PCM format");
+            let buffer = AVAudioPCMBuffer::initWithPCMFormat_frameCapacity(
+                AVAudioPCMBuffer::alloc(),
+                &format,
+                frames.max(1),
+            )
+            .expect("a PCM buffer");
+            buffer.setFrameLength(frames);
+            buffer
+        }
+    }
+
+    /// The buffer as the root object type the write's callback receives.
+    fn as_object(buffer: &AVAudioPCMBuffer) -> &AnyObject {
+        // SAFETY: every Objective-C object is a valid AnyObject.
+        unsafe { &*std::ptr::from_ref(buffer).cast::<AnyObject>() }
+    }
+
+    /// Writes one channel's samples through a buffer's channel pointers.
+    ///
+    /// # Safety
+    ///
+    /// `data` must hold a pointer for `channel` to at least `samples.len()` writable frames,
+    /// one sample apart.
+    unsafe fn fill_channel<T: Copy>(data: *mut NonNull<T>, channel: usize, samples: &[T]) {
+        // SAFETY: see the safety note on the function.
+        unsafe {
+            let frames = (*data.add(channel)).as_ptr();
+            for (frame, sample) in samples.iter().enumerate() {
+                *frames.add(frame) = *sample;
+            }
+        }
+    }
+
+    #[test]
+    fn a_float_buffer_reads_as_interleaved_f32() {
+        let buffer = pcm_buffer(AVAudioCommonFormat::PCMFormatFloat32, 2, 2);
+        // SAFETY: the buffer owns two channels of two writable float frames each.
+        unsafe {
+            let data = buffer.floatChannelData();
+            fill_channel(data, 0, &[0.0f32, 1.0]);
+            fill_channel(data, 1, &[-1.0f32, 0.5]);
+        }
+        let object = as_object(&buffer);
+        // SAFETY: the buffer is a live AVAudioPCMBuffer.
+        let chunk = unsafe { read_chunk(object) };
+        let expected = Chunk::F32 {
+            channels: 2,
+            rate: 22050,
+            samples: vec![0.0, -1.0, 1.0, 0.5],
+        };
+        assert_eq!(chunk, expected);
+    }
+
+    #[test]
+    fn an_int16_buffer_reads_as_i16() {
+        let buffer = pcm_buffer(AVAudioCommonFormat::PCMFormatInt16, 1, 3);
+        // SAFETY: the buffer owns one channel of three writable int16 frames.
+        unsafe { fill_channel(buffer.int16ChannelData(), 0, &[i16::MIN, i16::MAX, 7]) };
+        let object = as_object(&buffer);
+        // SAFETY: the buffer is a live AVAudioPCMBuffer.
+        let chunk = unsafe { read_chunk(object) };
+        let expected = Chunk::I16 {
+            channels: 1,
+            rate: 22050,
+            samples: vec![i16::MIN, i16::MAX, 7],
+        };
+        assert_eq!(chunk, expected);
+    }
+
+    #[test]
+    fn an_empty_buffer_ends_the_write_and_other_formats_are_unsupported() {
+        let empty = pcm_buffer(AVAudioCommonFormat::PCMFormatFloat32, 1, 0);
+        let object = as_object(&empty);
+        // SAFETY: the buffer is a live AVAudioPCMBuffer.
+        assert!(matches!(unsafe { read_chunk(object) }, Chunk::Done));
+        let wide = pcm_buffer(AVAudioCommonFormat::PCMFormatInt32, 1, 1);
+        let object = as_object(&wide);
+        // SAFETY: the buffer is a live AVAudioPCMBuffer.
+        assert!(matches!(unsafe { read_chunk(object) }, Chunk::Unsupported));
+    }
+
+    #[test]
+    fn an_absurd_sample_rate_is_unsupported() {
+        // SAFETY: plain allocations; the format is PCM, so the buffer init raises nothing.
+        let buffer = unsafe {
+            let format = AVAudioFormat::initWithCommonFormat_sampleRate_channels_interleaved(
+                AVAudioFormat::alloc(),
+                AVAudioCommonFormat::PCMFormatFloat32,
+                2_000_000.0,
+                1,
+                false,
+            )
+            .expect("a PCM format");
+            let buffer = AVAudioPCMBuffer::initWithPCMFormat_frameCapacity(
+                AVAudioPCMBuffer::alloc(),
+                &format,
+                1,
+            )
+            .expect("a PCM buffer");
+            buffer.setFrameLength(1);
+            buffer
+        };
+        // SAFETY: the buffer is a live AVAudioPCMBuffer.
+        let chunk = unsafe { read_chunk(as_object(&buffer)) };
+        assert_eq!(chunk, Chunk::Unsupported);
+    }
+
+    #[test]
+    fn a_voiceless_system_reports_the_engine_missing() {
+        assert_eq!(
+            init_answer(&[]).unwrap_err().kind(),
+            ErrorKind::EngineMissing
+        );
+        assert_eq!(init_answer(&[voice_from_system("a", "A", "en-US")]), Ok(()));
+    }
+
+    #[test]
+    fn a_vanished_voice_falls_back_to_the_language_voice() {
+        // SAFETY: class-method queries and an utterance built and read on this thread.
+        unsafe {
+            // A voiceless system has no language to fall back to.
+            if let Some(listed) = system_voices().first() {
+                let mut params = Parameters::new();
+                params.voice_id = Some("no.such.voice".to_owned());
+                params.language = Some(listed.language.clone());
+                let voice = build_utterance(&params, "").voice();
+                let language = voice.map(|voice| voice.language().to_string());
+                assert_eq!(language, Some(listed.language.clone()));
+            }
+        }
+    }
+
+    #[test]
+    fn the_write_callback_turns_each_buffer_into_a_chunk() {
+        let (chunks, assembled) = channel();
+        let block = chunk_block(chunks);
+        let audio = pcm_buffer(AVAudioCommonFormat::PCMFormatFloat32, 1, 2);
+        // SAFETY: the buffer owns one channel of two writable float frames.
+        unsafe { fill_channel(audio.floatChannelData(), 0, &[0.5f32, -0.5]) };
+        let end = pcm_buffer(AVAudioCommonFormat::PCMFormatFloat32, 1, 0);
+        // Called as AVFoundation calls it: once per buffer, the empty one last.
+        for buffer in [&audio, &end] {
+            let object = as_object(buffer);
+            block.call((NonNull::from(object),));
+        }
+        drop(block);
+        let wav = assemble(&assembled).unwrap();
+        assert_eq!(wav.len(), 44 + 4);
+        assert_eq!(&wav[44..46], &quantize(0.5).to_le_bytes());
+        assert_eq!(&wav[46..48], &quantize(-0.5).to_le_bytes());
+    }
+
+    /// A runtime on hand-held channels: the test stands in for AVFoundation and for the
+    /// dispatcher thread, so no speech session is needed.
+    struct Rig {
+        runtime: Runtime,
+        registry: Arc<Registry>,
+        reported: Receiver<DelegateEvent>,
+        commands: Sender<Command>,
+        inbox: Receiver<Command>,
+        seen: Arc<Mutex<Vec<UtteranceEvent>>>,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let (commands, inbox) = channel();
+            let (events, reported) = channel();
+            let registry: Arc<Registry> = Arc::new(Mutex::new(HashMap::new()));
+            Self {
+                runtime: Runtime::new(events, Arc::clone(&registry), commands.clone()),
+                registry,
+                reported,
+                commands,
+                inbox,
+                seen: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        /// Speaks empty text with a sink that records into `seen`, and answers its id: no
+        /// audio session ever starts, and the text plays no part in the state machine.
+        fn speak(&mut self, interrupt: bool) -> u64 {
+            let seen = Arc::clone(&self.seen);
+            let (reply, answered) = oneshot::channel();
+            self.runtime.handle(Command::Speak {
+                text: String::new(),
+                interrupt,
+                sink: Box::new(move |event| lock(&seen).push(event)),
+                reply,
+            });
+            answered.blocking_recv().unwrap().unwrap()
+        }
+
+        /// Messages the delegate as AVFoundation would for the utterance fed under `id`, then
+        /// runs the dispatcher and the runtime over what that raised. Only what is already
+        /// queued is handled, so this cannot wait.
+        fn report(&mut self, id: u64, event: fn(usize) -> DelegateEvent) {
+            let utterance = lock(&self.registry)
+                .values()
+                .find(|active| active.id == id)
+                .map(|active| active._utterance._utterance.clone())
+                .expect("the utterance is registered while it speaks");
+            let delegate: &Delegate = &self.runtime._delegate;
+            let synth: &AVSpeechSynthesizer = &self.runtime.synth;
+            // SAFETY: the delegate implements each selector with these argument types.
+            unsafe {
+                match event(0) {
+                    DelegateEvent::Start(_) => {
+                        let _: () = msg_send![
+                            delegate,
+                            speechSynthesizer: synth,
+                            didStartSpeechUtterance: &*utterance
+                        ];
+                    }
+                    DelegateEvent::Progress(..) => {
+                        let _: () = msg_send![
+                            delegate,
+                            speechSynthesizer: synth,
+                            willSpeakRangeOfSpeechString: NSRange::new(2, 5),
+                            utterance: &*utterance
+                        ];
+                    }
+                    DelegateEvent::Finish(_) => {
+                        let _: () = msg_send![
+                            delegate,
+                            speechSynthesizer: synth,
+                            didFinishSpeechUtterance: &*utterance
+                        ];
+                    }
+                    DelegateEvent::Cancel(_) => {
+                        let _: () = msg_send![
+                            delegate,
+                            speechSynthesizer: synth,
+                            didCancelSpeechUtterance: &*utterance
+                        ];
+                    }
+                }
+            }
+            let (forward, forwarded) = channel();
+            for event in self.reported.try_iter() {
+                forward.send(event).unwrap();
+            }
+            drop(forward);
+            dispatch(forwarded, Arc::clone(&self.registry), self.commands.clone());
+            for command in self.inbox.try_iter() {
+                self.runtime.handle(command);
+            }
+        }
+
+        fn is_speaking(&mut self) -> bool {
+            let (reply, answered) = oneshot::channel();
+            self.runtime.handle(Command::IsSpeaking { reply });
+            answered.blocking_recv().unwrap().unwrap()
+        }
+
+        /// The ids the delegate may still report on.
+        fn registered(&self) -> Vec<u64> {
+            let mut ids: Vec<u64> = lock(&self.registry)
+                .values()
+                .map(|active| active.id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        }
+
+        /// What the sinks saw, as (utterance id, event) in delivery order.
+        fn seen(&self) -> Vec<(u64, UtteranceEventKind)> {
+            lock(&self.seen)
+                .iter()
+                .map(|event| (event.utterance_id, event.kind.clone()))
+                .collect()
+        }
+    }
+
+    /// The progress event `Rig::report` sends: the range is fixed there.
+    fn progress(address: usize) -> DelegateEvent {
+        DelegateEvent::Progress(address, 0, 0)
+    }
+
+    #[test]
+    fn delegate_messages_carry_one_utterance_from_start_to_finish() {
+        let mut rig = Rig::new();
+        let id = rig.speak(false);
+        rig.report(id, DelegateEvent::Start);
+        rig.report(id, progress);
+        assert_eq!(rig.registered(), [id]);
+        rig.report(id, DelegateEvent::Finish);
+        assert_eq!(
+            rig.seen(),
+            [
+                (id, UtteranceEventKind::Start),
+                (
+                    id,
+                    UtteranceEventKind::Progress {
+                        location: 2,
+                        length: 5
+                    }
+                ),
+                (id, UtteranceEventKind::Finish),
+            ]
+        );
+        assert!(rig.registered().is_empty());
+        assert!(rig.runtime.queue.is_empty());
+    }
+
+    #[test]
+    fn an_interrupt_cancels_the_running_utterance_and_jumps_the_queue() {
+        let mut rig = Rig::new();
+        let first = rig.speak(false);
+        rig.runtime.speaking_override = Some(true);
+        let second = rig.speak(false);
+        let third = rig.speak(true);
+        assert_eq!(rig.runtime.queue.len(), 2);
+        assert!(rig.is_speaking());
+        // A speaking synthesizer holds the queue back.
+        rig.runtime.handle(Command::Advance);
+        assert_eq!(rig.registered(), [first]);
+        // The cancel frees the synthesizer: the interrupter runs next, ahead of the queue.
+        rig.runtime.speaking_override = Some(false);
+        rig.report(first, DelegateEvent::Cancel);
+        assert_eq!(rig.registered(), [third]);
+        rig.report(third, DelegateEvent::Start);
+        rig.report(third, DelegateEvent::Finish);
+        assert_eq!(rig.registered(), [second]);
+        rig.report(second, DelegateEvent::Finish);
+        assert_eq!(
+            rig.seen(),
+            [
+                (first, UtteranceEventKind::Cancel),
+                (third, UtteranceEventKind::Start),
+                (third, UtteranceEventKind::Finish),
+                (second, UtteranceEventKind::Finish),
+            ]
+        );
+        assert!(rig.registered().is_empty());
+        assert!(rig.runtime.queue.is_empty());
+    }
+
+    #[test]
+    fn stop_cancels_the_running_utterance_and_keeps_the_queue() {
+        let mut rig = Rig::new();
+        let running = rig.speak(false);
+        rig.runtime.speaking_override = Some(true);
+        let queued = rig.speak(false);
+        let (reply, answered) = oneshot::channel();
+        rig.runtime.handle(Command::Stop { reply });
+        assert_eq!(answered.blocking_recv().unwrap(), Ok(()));
+        assert_eq!(rig.runtime.queue.len(), 1);
+        rig.runtime.speaking_override = Some(false);
+        rig.report(running, DelegateEvent::Cancel);
+        assert_eq!(rig.seen(), [(running, UtteranceEventKind::Cancel)]);
+        assert_eq!(rig.registered(), [queued]);
+        assert!(rig.runtime.queue.is_empty());
+    }
+
+    #[test]
+    fn a_gathering_runtime_answers_busy_until_the_synthesis_is_done() {
+        let mut rig = Rig::new();
+        rig.runtime.synthesizing = true;
+        let (reply, answered) = oneshot::channel();
+        rig.runtime.handle(Command::Synthesize {
+            text: String::new(),
+            reply,
+        });
+        assert_eq!(
+            answered.blocking_recv().unwrap().unwrap_err().kind(),
+            ErrorKind::Busy
+        );
+        rig.runtime.handle(Command::SynthesisDone);
+        assert!(!rig.runtime.synthesizing);
+    }
+
+    #[test]
+    fn a_dead_runtime_settles_the_call_as_a_backend_fault() {
+        // The line is closed: the command cannot even be sent.
+        let (commands, inbox) = channel();
+        drop(inbox);
+        assert_eq!(
+            drive(NativeBackend::ask(&commands, |reply| Command::Stop {
+                reply
+            }))
+            .unwrap_err()
+            .kind(),
+            ErrorKind::Backend
+        );
+        // The runtime takes the command and dies before answering it.
+        let (commands, inbox) = channel();
+        let dying = thread::spawn(move || drop(inbox.recv()));
+        assert_eq!(
+            drive(NativeBackend::ask(&commands, |reply| Command::Stop {
+                reply
+            }))
+            .unwrap_err()
+            .kind(),
+            ErrorKind::Backend
+        );
+        dying.join().unwrap();
+    }
+
+    #[test]
+    fn speak_settles_with_the_utterance_id() {
+        let _turn = my_turn();
+        // Empty text starts no audio; the id is assigned when the command is taken.
+        let id = drive(NativeBackend.speak("", false, Box::new(|_| ())))
+            .unwrap()
+            .expect("Apple numbers every utterance");
+        assert!(id >= 1);
     }
 }

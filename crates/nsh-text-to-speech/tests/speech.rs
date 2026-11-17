@@ -787,3 +787,92 @@ fn speech_new_takes_the_platform_backend() {
     // Construction asks the platform for its backend and nothing else; no audio.
     assert!(Speech::new().is_ok());
 }
+
+#[test]
+fn pause_and_resume_report_a_failing_platform() {
+    let (speech, fake) = speech_with_fake();
+    run(async {
+        speech.speak("Hello", false).await.unwrap();
+        fake.set_pause(Err(SpeechError::new(ErrorKind::Backend).with_status(6)));
+        let error = speech.pause().await.unwrap_err();
+        assert_eq!(
+            (error.kind(), error.status()),
+            (ErrorKind::Backend, Some(6))
+        );
+        // The failed pause left nothing paused.
+        let unpaused = speech.resume().await.unwrap_err();
+        assert_eq!(unpaused.kind(), ErrorKind::NotSpeaking);
+
+        fake.set_pause(Ok(()));
+        speech.pause().await.unwrap();
+        fake.set_resume(Err(SpeechError::new(ErrorKind::SynthesisFailed)));
+        let error = speech.resume().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::SynthesisFailed);
+        // The failed resume leaves the utterance paused, ready to try again.
+        fake.set_resume(Ok(()));
+        speech.resume().await.unwrap();
+    });
+}
+
+#[test]
+fn releasing_an_unheld_synthesize_is_a_no_op() {
+    let (speech, fake) = speech_with_fake();
+    run(async {
+        // No hold was laid; releasing anyway neither blocks nor breaks the next answer.
+        fake.release_synthesize();
+        assert!(speech.synthesize("after a stray release").await.is_ok());
+        assert_eq!(fake.synth_calls(), 1);
+    });
+}
+
+#[test]
+fn an_awaited_speak_settles_when_the_backend_loses_the_utterance() {
+    let backend = IdLessBackend::new();
+    let speech = Speech::with_backend(Box::new(backend.clone()));
+    run(async {
+        speech.await_speak_completion(true);
+        let call = {
+            let speech = speech.clone();
+            tokio::task::spawn_local(async move { speech.speak("lost", false).await })
+        };
+        settle(|| backend.sink.lock().unwrap().is_some()).await;
+        // The platform drops the sink without a word of its own: the call settles with a coded
+        // fault instead of hanging.
+        drop(backend.sink.lock().unwrap().take());
+        let error = call.await.unwrap().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Backend);
+        assert_eq!(error.code(), "ERR_TTS_BACKEND");
+    });
+}
+
+#[test]
+fn a_second_terminal_event_settles_nothing_but_still_reaches_the_handler() {
+    let backend = IdLessBackend::new();
+    let speech = Speech::with_backend(Box::new(backend.clone()));
+    run(async {
+        let events = collector(&speech);
+        speech.await_speak_completion(true);
+        let call = {
+            let speech = speech.clone();
+            tokio::task::spawn_local(async move { speech.speak("double", false).await })
+        };
+        settle(|| backend.sink.lock().unwrap().is_some()).await;
+        let sink = backend
+            .sink
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the sink is held");
+        let finish = UtteranceEvent {
+            utterance_id: 9,
+            kind: UtteranceEventKind::Finish,
+        };
+        sink(finish.clone());
+        assert_eq!(call.await.unwrap().unwrap(), 1);
+        // A platform that reports a second terminal settles nothing twice; the handler hears it.
+        sink(finish);
+        let events = events.lock().unwrap();
+        assert_eq!(kinds(&events), ["finish", "finish"]);
+        assert!(events.iter().all(|event| event.utterance_id == 9));
+    });
+}
