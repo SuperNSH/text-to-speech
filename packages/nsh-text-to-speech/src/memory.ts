@@ -8,6 +8,8 @@ export interface MemorySpeechConfig {
   /** `init` rejects with this code. */
   initError?: SpeechErrorCode;
   voices?: Voice[];
+  /** `voices` rejects with this failure instead of listing. */
+  voicesError?: { code: SpeechErrorCode; status?: number };
   engines?: Engine[];
   languages?: string[];
   /** `speak` rejects with this failure instead of speaking. */
@@ -133,7 +135,12 @@ export function memoryBackend(config: MemorySpeechConfig = {}): MemorySpeech {
       if (config.synthesizeError !== undefined) return Promise.reject(new SpeechError(config.synthesizeError));
       return Promise.resolve(config.wav !== undefined ? new Uint8Array(config.wav) : wavHeader());
     },
-    voices: async () => [...voices],
+    voices: () => {
+      if (config.voicesError !== undefined) {
+        return Promise.reject(new SpeechError(config.voicesError.code, config.voicesError.status));
+      }
+      return Promise.resolve([...voices]);
+    },
     engines: async () => [...engines],
     languages: async () => [...languages],
     maxSpeechInputLength: () => Promise.resolve(config.maxSpeechInputLength ?? null),

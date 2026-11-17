@@ -121,6 +121,26 @@ test("stop_cancels_awaited_speak_once", async () => {
   expect(backend.stops()).toBe(2);
 });
 
+test("stop_clears_the_queue", async () => {
+  const backend = memoryBackend();
+  const speech = new Speech({ backend });
+  const seen = remember(speech);
+  speech.awaitSpeakCompletion(true);
+  const first = speech.speak("First", false);
+  first.catch(() => {});
+  await delivered();
+  const second = speech.speak("Second", false);
+  second.catch(() => {});
+  await delivered();
+  await speech.stop();
+  await expect(first).rejects.toMatchObject({ code: "ERR_TTS_CANCELLED" });
+  await expect(second).rejects.toMatchObject({ code: "ERR_TTS_CANCELLED" });
+  // The queued utterance never fired a start; each utterance saw exactly one cancel.
+  expect(seen).toEqual(["start 1", "cancel 1", "cancel 2"]);
+  expect(await speech.isSpeaking()).toBe(false);
+  expect(backend.finishUtterance()).toBe(false);
+});
+
 test("pause_and_resume_round_trip", async () => {
   const backend = memoryBackend();
   const speech = new Speech({ backend });
@@ -206,6 +226,15 @@ test("unknown_language_reports_unavailable", async () => {
   expect(await speech.isLanguageAvailable("fr-FR")).toBe(false);
 });
 
+test("language_matching_ignores_case", async () => {
+  const speech = new Speech({ backend: memoryBackend({ languages: ["en-US"] }) });
+  expect(await speech.isLanguageAvailable("en-US")).toBe(true);
+  expect(await speech.isLanguageAvailable("en-us")).toBe(true);
+  expect(await speech.isLanguageAvailable("EN-us")).toBe(true);
+  // An unlisted tag stays unavailable, whatever its case.
+  expect(await speech.isLanguageAvailable("de-DE")).toBe(false);
+});
+
 test("set_unknown_voice_reports_voice_not_found", async () => {
   const backend = memoryBackend({ voices: [{ id: "v1", name: "Samantha", language: "en-US", networkRequired: false, installed: true }] });
   const speech = new Speech({ backend });
@@ -219,6 +248,13 @@ test("uninstalled_voice_reports_voice_not_found", async () => {
   const backend = memoryBackend({ voices: [{ id: "v2", name: "Remote", language: "en-US", networkRequired: true, installed: false }] });
   const speech = new Speech({ backend });
   await expect(speech.setVoice("v2")).rejects.toMatchObject({ code: "ERR_TTS_VOICE_NOT_FOUND" });
+  expect(backend.lastVoice()).toBeUndefined();
+});
+
+test("set_voice_propagates_a_failed_voice_list", async () => {
+  const backend = memoryBackend({ voicesError: { code: "ERR_TTS_BACKEND", status: 500 } });
+  const speech = new Speech({ backend });
+  await expect(speech.setVoice("v1")).rejects.toMatchObject({ code: "ERR_TTS_BACKEND", status: 500 });
   expect(backend.lastVoice()).toBeUndefined();
 });
 
@@ -315,8 +351,10 @@ test("error_codes_are_stable_and_unique", async () => {
 });
 
 test("missing_voice_list_is_empty", async () => {
-  const speech = new Speech({ backend: memoryBackend({ voices: [] }) });
-  expect(await speech.voices()).toEqual([]);
+  const empty = new Speech({ backend: memoryBackend({ voices: [] }) });
+  expect(await empty.voices()).toEqual([]);
+  const failed = new Speech({ backend: memoryBackend({ voicesError: { code: "ERR_TTS_BACKEND", status: 500 } }) });
+  expect(await failed.voices()).toEqual([]);
 });
 
 test("backend_rejections_carry_codes", async () => {
@@ -325,12 +363,24 @@ test("backend_rejections_carry_codes", async () => {
     ...memory,
     setLanguage: () => Promise.reject(new Error("wedge")),
     setRate: () => Promise.reject(new Error("wedge")),
-    voices: () => Promise.reject(new Error("wedge")),
     isSpeaking: () => Promise.reject(new Error("wedge")),
   };
   const speech = new Speech({ backend });
   await expect(speech.setLanguage("en-US")).rejects.toMatchObject({ code: "ERR_TTS_BACKEND" });
   await expect(speech.setSpeechRate(0.5)).rejects.toMatchObject({ code: "ERR_TTS_BACKEND" });
-  await expect(speech.voices()).rejects.toMatchObject({ code: "ERR_TTS_BACKEND" });
   await expect(speech.isSpeaking()).rejects.toMatchObject({ code: "ERR_TTS_BACKEND" });
+});
+
+test("engines_and_languages_read_a_failed_list_as_empty", async () => {
+  const memory = memoryBackend();
+  const backend: SpeechBackend = {
+    ...memory,
+    engines: () => Promise.reject(new Error("wedge")),
+    languages: () => Promise.reject(new Error("wedge")),
+  };
+  const speech = new Speech({ backend });
+  expect(await speech.engines()).toEqual([]);
+  expect(await speech.languages()).toEqual([]);
+  // No list means no voice to find: availability still settles, as false.
+  expect(await speech.isLanguageAvailable("en-US")).toBe(false);
 });

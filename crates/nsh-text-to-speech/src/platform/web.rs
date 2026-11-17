@@ -4,6 +4,8 @@
 //! utterance is handed to the browser at a time, and each utterance's callbacks settle it exactly
 //! once. Interrupt and `stop` settle the cancelled utterance themselves — Chrome reports
 //! `canceled` only after the call returned — and the terminal guard drops whatever arrives late.
+//! `stop` also drains the kept queue, cancelling each waiting utterance itself: nothing of it
+//! was handed to the browser, so no callback ever will.
 //! Every hand-over waits one macrotask, because Chromium swallows a `speak` issued in the same
 //! task as a `cancel`, leaving the utterance without events; while an utterance is live, a
 //! heartbeat resumes the browser every few seconds, because Chrome stops firing events partway
@@ -482,18 +484,30 @@ impl Backend for NativeBackend {
     }
 
     fn stop(&self) -> BackendFuture<'_, Result<(), SpeechError>> {
-        let current = with_state(|state| state.current.take());
-        Box::pin(ready(if let Some((id, live)) = current {
+        // The running utterance first, then the queue in order; nothing starts after, so the
+        // queue is drained rather than run.
+        let (current, waiting) = with_state(|state| {
+            (
+                state.current.take(),
+                std::mem::take(&mut state.queue)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            )
+        });
+        if let Some((id, live)) = current {
             if let Some(synthesis) = synthesis() {
                 synthesis.cancel();
             }
             unlatch();
             report(&live, id, UtteranceEventKind::Cancel, true);
-            run_queue();
-            Ok(())
-        } else {
-            Ok(())
-        }))
+        }
+        for Waiting { id, sink, .. } in waiting {
+            sink(UtteranceEvent {
+                utterance_id: id,
+                kind: UtteranceEventKind::Cancel,
+            });
+        }
+        Box::pin(ready(Ok(())))
     }
 
     fn pause(&self) -> BackendFuture<'_, Result<(), SpeechError>> {

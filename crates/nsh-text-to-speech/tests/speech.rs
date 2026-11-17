@@ -209,6 +209,56 @@ fn stop_cancels_awaited_speak_once() {
 }
 
 #[test]
+fn stop_clears_the_queue() {
+    let (speech, fake) = speech_with_fake();
+    run(async {
+        let events = collector(&speech);
+        speech.await_speak_completion(true);
+        let first = {
+            let speech = speech.clone();
+            tokio::task::spawn_local(async move { speech.speak("first", false).await })
+        };
+        settle(|| fake.pending_id().is_some()).await;
+        let second = {
+            let speech = speech.clone();
+            tokio::task::spawn_local(async move { speech.speak("second", false).await })
+        };
+        settle(|| fake.queued() == 1).await;
+
+        speech.stop().await.unwrap();
+        assert_eq!(
+            first.await.unwrap().unwrap_err().code(),
+            "ERR_TTS_CANCELLED"
+        );
+        assert_eq!(
+            second.await.unwrap().unwrap_err().code(),
+            "ERR_TTS_CANCELLED"
+        );
+
+        {
+            let events = events.lock().unwrap();
+            let first = events
+                .iter()
+                .filter(|event| event.utterance_id == 1)
+                .cloned()
+                .collect::<Vec<_>>();
+            let second = events
+                .iter()
+                .filter(|event| event.utterance_id == 2)
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(kinds(&first), ["start", "cancel"]);
+            // The queued utterance never started: one cancel event and nothing else.
+            assert_eq!(kinds(&second), ["cancel"]);
+        }
+        assert_eq!(fake.pending_id(), None);
+        assert_eq!(fake.queued(), 0, "the queue is cleared, not advanced");
+        assert!(!speech.is_speaking().await.unwrap());
+        assert!(!fake.finish_utterance(), "nothing starts after a stop");
+    });
+}
+
+#[test]
 fn pause_and_resume_round_trip() {
     let (speech, fake) = speech_with_fake();
     run(async {
@@ -341,6 +391,18 @@ fn uninstalled_voice_reports_voice_not_found() {
         // An installed voice still passes.
         speech.set_voice("fake-voice").await.unwrap();
         assert_eq!(fake.last_voice().as_deref(), Some("fake-voice"));
+    });
+}
+
+#[test]
+fn set_voice_propagates_a_failed_voice_list() {
+    let (speech, fake) = speech_with_fake();
+    run(async {
+        fake.set_voices(Err(SpeechError::new(ErrorKind::Backend).with_status(500)));
+        let error = speech.set_voice("fake-voice").await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Backend);
+        assert_eq!(error.status(), Some(500));
+        assert_eq!(fake.last_voice(), None, "the platform is never asked");
     });
 }
 
@@ -478,11 +540,12 @@ fn error_codes_are_stable_and_unique() {
 fn missing_voice_list_is_empty() {
     let (speech, fake) = speech_with_fake();
     run(async {
-        fake.set_voices(Err(SpeechError::new(ErrorKind::Backend)));
+        // An empty configured list reads as an empty one.
+        fake.set_voices(Ok(Vec::new()));
         assert!(speech.voices().await.is_empty());
-        // With no list to check against, no voice can be known.
-        let error = speech.set_voice("fake-voice").await.unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::VoiceNotFound);
+        // So does a list the platform failed to give: a lenient read, not a fault.
+        fake.set_voices(Err(SpeechError::new(ErrorKind::Backend).with_status(500)));
+        assert!(speech.voices().await.is_empty());
     });
 }
 
@@ -768,6 +831,19 @@ fn languages_list_what_the_device_offers() {
         // BCP 47 tags match whatever their case.
         assert!(speech.is_language_available("EN-gb").await);
         assert!(!speech.is_language_available("fr-FR").await);
+    });
+}
+
+#[test]
+fn language_matching_ignores_case() {
+    let (speech, fake) = speech_with_fake();
+    run(async {
+        fake.set_languages(vec!["en-US".to_owned()]);
+        assert!(speech.is_language_available("en-US").await);
+        assert!(speech.is_language_available("en-us").await);
+        assert!(speech.is_language_available("EN-us").await);
+        // An unlisted tag stays unavailable, whatever its case.
+        assert!(!speech.is_language_available("de-DE").await);
     });
 }
 

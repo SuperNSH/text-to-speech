@@ -3,7 +3,7 @@
 //! One runtime thread owns the synthesizer and its delegate (`Retained` is not `Send`), and a
 //! dispatcher thread hands delegate events to each utterance's sink, so a handler may call back
 //! into the backend. The queue is ours, not AVFoundation's: `speak` queues FIFO, `interrupt`
-//! cancels only the running utterance, and `stop` keeps what is queued. Synthesis starts
+//! cancels only the running utterance, and `stop` cancels what is queued with it. Synthesis starts
 //! `writeUtterance:toBufferCallback:` on the runtime thread and gathers its buffers on a thread
 //! of its own, one synthesis at a time, so commands keep being answered while it runs and a
 //! second write never interleaves its buffers.
@@ -39,7 +39,7 @@ use tokio::sync::oneshot;
 use crate::{
     backend::{Backend, BackendFuture, EventSink},
     error::{ErrorKind, SpeechError},
-    options::{Engine, UtteranceEvent, UtteranceEventKind, Voice},
+    options::{Engine, UtteranceEvent, UtteranceEventKind, UtteranceId, Voice},
 };
 
 pub(crate) struct NativeBackend;
@@ -518,11 +518,15 @@ impl Runtime {
                 let _ = reply.send(Ok(id));
             }
             Command::Stop { reply } => {
-                // Only the running utterance is cancelled; the queue is ours and survives.
+                // The queue is cancelled with the running utterance; the running one's cancel
+                // arrives through the delegate, the queued ones were never registered there.
                 unsafe {
                     self.synth
                         .stopSpeakingAtBoundary(AVSpeechBoundary::Immediate)
                 };
+                for pending in std::mem::take(&mut self.queue) {
+                    cancel_sink(&pending.sink, pending.id);
+                }
                 let _ = reply.send(Ok(()));
             }
             Command::Pause { reply } => {
@@ -752,6 +756,17 @@ fn deliver(registry: &Registry, address: usize, kind: UtteranceEventKind, termin
 fn run_sink(sink: &Mutex<EventSink>, event: UtteranceEvent) {
     let sink = lock(sink);
     let _ = catch_unwind(AssertUnwindSafe(|| sink(event)));
+}
+
+/// Cancels a never-started utterance's sink on the runtime thread. The panic is caught as
+/// `run_sink` catches one, so a handler bug cannot take the runtime — and every call on it — down.
+fn cancel_sink(sink: &EventSink, id: UtteranceId) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        sink(UtteranceEvent {
+            utterance_id: id,
+            kind: UtteranceEventKind::Cancel,
+        })
+    }));
 }
 
 /// The address AVFoundation reports an utterance by: unique while it speaks, because the
@@ -2058,20 +2073,40 @@ mod tests {
     }
 
     #[test]
-    fn stop_cancels_the_running_utterance_and_keeps_the_queue() {
+    fn stop_cancels_the_running_utterance_and_drains_the_queue() {
         let mut rig = Rig::new();
         let running = rig.speak(false);
         rig.runtime.speaking_override = Some(true);
-        let queued = rig.speak(false);
+        let first = rig.speak(false);
+        let second = rig.speak(false);
         let (reply, answered) = oneshot::channel();
         rig.runtime.handle(Command::Stop { reply });
         assert_eq!(answered.blocking_recv().unwrap(), Ok(()));
-        assert_eq!(rig.runtime.queue.len(), 1);
+        assert!(
+            rig.runtime.queue.is_empty(),
+            "the queue is drained, not kept"
+        );
+        // The queued utterances never started: each settles with one cancel, in queue order.
+        assert_eq!(
+            rig.seen(),
+            [
+                (first, UtteranceEventKind::Cancel),
+                (second, UtteranceEventKind::Cancel),
+            ]
+        );
+        // The running utterance's cancel still arrives through the delegate.
         rig.runtime.speaking_override = Some(false);
         rig.report(running, DelegateEvent::Cancel);
-        assert_eq!(rig.seen(), [(running, UtteranceEventKind::Cancel)]);
-        assert_eq!(rig.registered(), [queued]);
-        assert!(rig.runtime.queue.is_empty());
+        assert_eq!(
+            rig.seen(),
+            [
+                (first, UtteranceEventKind::Cancel),
+                (second, UtteranceEventKind::Cancel),
+                (running, UtteranceEventKind::Cancel),
+            ]
+        );
+        assert!(rig.registered().is_empty());
+        assert!(!rig.is_speaking());
     }
 
     #[test]

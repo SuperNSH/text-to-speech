@@ -47,17 +47,7 @@ pub fn platform_backend() -> Result<Box<dyn Backend>, SpeechError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{future::Future, time::Duration};
-
     use super::*;
-
-    fn run<F: Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
 
     #[test]
     #[cfg(target_vendor = "apple")]
@@ -74,6 +64,18 @@ mod tests {
         all(target_arch = "wasm32", target_os = "unknown")
     ))]
     fn the_host_backend_settles_without_audio() {
+        use std::time::Duration;
+
+        // Lives here, cfg with its only caller: on a target without a backend it would be
+        // dead code, which `-D warnings` refuses.
+        fn run<F: std::future::Future>(future: F) -> F::Output {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap()
+                .block_on(future)
+        }
+
         let backend = platform_backend().expect("this target has a backend");
         // Queries alone: neither plays audio, and both settle within the bound.
         let bound = Duration::from_secs(30);
@@ -94,10 +96,11 @@ mod tests {
     fn a_target_without_speech_reports_not_available() {
         use crate::error::ErrorKind;
 
+        // `Box<dyn Backend>` is not `Debug`, so the answer is matched, not `unwrap_err`'d.
         // No speech service exists there at all: `Speech::new` says so, coded, and settles.
-        assert_eq!(
-            platform_backend().unwrap_err().kind(),
-            ErrorKind::NotAvailable
-        );
+        match platform_backend() {
+            Ok(_) => panic!("this target has no speech backend"),
+            Err(error) => assert_eq!(error.kind(), ErrorKind::NotAvailable),
+        }
     }
 }

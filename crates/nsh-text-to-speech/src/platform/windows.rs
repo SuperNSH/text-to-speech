@@ -362,6 +362,12 @@ fn take_cancelled(inner: &mut Inner) -> Option<Held> {
     }
 }
 
+/// Takes everything a stop cancels, under the lock: the running utterance by its route, and
+/// the whole waiting queue with it. The sinks fire after, outside the lock.
+fn take_stopped(inner: &mut Inner) -> (Option<Held>, VecDeque<Held>) {
+    (take_cancelled(inner), std::mem::take(&mut inner.waiting))
+}
+
 /// Takes one utterance back out of the queue by id: the settlement of a refused starter spawn,
 /// so nothing of a call that reported failure is left to speak. `None` when no slot holds the
 /// id — a concurrent stop already cancelled it, and its cancel fired there.
@@ -637,18 +643,18 @@ impl Backend for NativeBackend {
 
     fn stop(&self) -> BackendFuture<'_, Result<(), SpeechError>> {
         Box::pin(async move {
-            let cancelled = {
+            // The whole queue is cancelled with the running utterance, each sink exactly once
+            // and nothing starts after — so no starter is nudged here.
+            let (running, waiting) = {
                 let mut inner = lock();
-                take_cancelled(&mut inner)
+                take_stopped(&mut inner)
             };
-            if let Some(held) = cancelled {
+            if let Some(held) = running {
                 fire(&held.sink, held.id, UtteranceEventKind::Cancel);
             }
-            // The running utterance's cancel has fired by here; queued utterances stay queued,
-            // as the trait holds — their calls promised a start, not an immediate one. A refused
-            // starter spawn leaves them for the next nudge: failing this call would misreport a
-            // cancel that already happened.
-            let _ = nudge(None);
+            for held in waiting {
+                fire(&held.sink, held.id, UtteranceEventKind::Cancel);
+            }
             Ok(())
         })
     }
@@ -868,6 +874,25 @@ mod tests {
         assert_eq!(stop_route(true, false), StopRoute::RevokeStarter);
         assert_eq!(stop_route(false, true), StopRoute::TakeHeld);
         assert_eq!(stop_route(false, false), StopRoute::TakeHeld);
+    }
+
+    #[test]
+    fn a_stop_takes_the_whole_waiting_queue_in_order() {
+        // A starter holds its utterance while it renders: the route below leaves that one to
+        // the starter itself and still empties the waiting queue, first in, first out.
+        let mut inner = inner_of(&[5, 9]);
+        inner.starting = true;
+        let (running, waiting) = take_stopped(&mut inner);
+        assert!(
+            running.is_none(),
+            "the starter fires its utterance's cancel itself"
+        );
+        assert!(inner.revoke_start);
+        assert_eq!(
+            waiting.iter().map(|held| held.id).collect::<Vec<_>>(),
+            vec![5, 9]
+        );
+        assert!(inner.waiting.is_empty());
     }
 
     #[test]

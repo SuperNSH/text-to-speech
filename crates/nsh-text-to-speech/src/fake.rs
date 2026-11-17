@@ -394,14 +394,16 @@ impl Backend for FakeBackend {
     }
 
     fn stop(&self) -> BackendFuture<'_, Result<(), SpeechError>> {
-        let pending = {
+        let cancelled = {
             let mut state = self.lock();
             state.stops += 1;
-            state.pending.take()
+            // The running utterance first, then the queue in order; nothing starts after.
+            let mut cancelled = state.pending.take().into_iter().collect::<Vec<_>>();
+            cancelled.extend(state.queue.drain(..));
+            cancelled
         };
-        if let Some(pending) = pending {
+        for pending in cancelled {
             fire(&pending.sink, pending.id, UtteranceEventKind::Cancel);
-            self.advance();
         }
         Box::pin(ready(Ok(())))
     }

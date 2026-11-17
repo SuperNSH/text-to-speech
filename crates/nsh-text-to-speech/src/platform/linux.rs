@@ -6,12 +6,12 @@
 //! not running. Voices are the output module's synthesis voices; SSIP cannot hand back audio
 //! bytes, so `synthesize` reports `NotAvailable`.
 //!
-//! Queue order: `stop` and an interrupting `speak` use SSIP `STOP`, which ends the running
-//! utterance and keeps the queue. On `interrupt` the new utterance joins behind whatever was
-//! already queued — it does not leap the queue as the fake backend has it, because SSIP has no
-//! command that starts one message before another while keeping both: `CANCEL` drops this
-//! client's whole queue, and a higher priority would make the interrupting utterance
-//! unpausable.
+//! Queue order: an interrupting `speak` uses SSIP `STOP`, which ends only the running
+//! utterance and keeps the queue, and the new utterance joins behind whatever was already
+//! queued — it does not leap the queue as the fake backend has it, because SSIP has no command
+//! that starts one message before another while keeping both, and a higher priority would make
+//! the interrupting utterance unpausable. `stop` uses `CANCEL`, which the protocol defines as
+//! `STOP` except it "stops as yet unspoken output messages as well": this client's whole queue.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -582,7 +582,7 @@ impl Session {
     /// queued stays ahead of it, first in, first out.
     fn speak(&mut self, text: &str, interrupt: bool, sink: EventSink) -> Outcome {
         if interrupt {
-            let outcome = self.stop_running();
+            let outcome = self.stop_last();
             if !outcome.alive || outcome.answer.is_err() {
                 return outcome;
             }
@@ -618,9 +618,32 @@ impl Session {
         self.message_id()
     }
 
-    /// Stops the running utterance with SSIP `STOP` — the queue is kept and plays next, as the
-    /// trait promises. The stopped utterance's sink is answered here already; the `cancel`
+    /// Stops the running utterance with SSIP `STOP` — the queue is kept and plays next, as an
+    /// interrupt needs. The stopped utterance's sink is answered here already; the `cancel`
     /// speechd fires for it finds no sink and only tidies the lifecycle.
+    fn stop_last(&mut self) -> Outcome {
+        // Nothing submitted and nothing paused means nothing can be running.
+        if !self.is_speaking() && !self.paused {
+            return Outcome {
+                answer: Ok(Reply::Done),
+                alive: true,
+            };
+        }
+        let outcome = Outcome::from_wire(self.command(interrupt_request()), map_client_error);
+        if outcome.alive
+            && outcome.answer.is_ok()
+            && let Some(id) = self.active.take()
+        {
+            self.speaking = false;
+            self.paused = false;
+            self.fire(id, UtteranceEventKind::Cancel);
+        }
+        outcome
+    }
+
+    /// `stop`: the running utterance and the whole queue are cancelled over SSIP. Every held
+    /// sink settles here, the running one first, then the queue in order; the `cancel`
+    /// notifications speechd fires for them find no sink and only tidy the lifecycle.
     fn stop_running(&mut self) -> Outcome {
         // Nothing submitted and nothing paused means nothing can be running.
         if !self.is_speaking() && !self.paused {
@@ -629,17 +652,13 @@ impl Session {
                 alive: true,
             };
         }
-        let outcome = Outcome::from_wire(
-            self.command(Request::Stop(MessageScope::Last)),
-            map_client_error,
-        );
-        if outcome.alive
-            && outcome.answer.is_ok()
-            && let Some(id) = self.active.take()
-        {
+        let outcome = Outcome::from_wire(self.command(stop_request()), map_client_error);
+        if outcome.alive && outcome.answer.is_ok() {
             self.speaking = false;
             self.paused = false;
-            self.fire(id, UtteranceEventKind::Cancel);
+            for id in self.active.take().into_iter().chain(self.queued.drain(..)) {
+                self.fire(id, UtteranceEventKind::Cancel);
+            }
         }
         outcome
     }
@@ -1050,6 +1069,18 @@ fn ssip_rate(rate: f32) -> i8 {
     scaled(rate * 200.0 - 100.0)
 }
 
+/// An interrupt's flow-control request: `STOP self` ends only the running message, and the
+/// queue — which the interrupter joins at its back — plays on.
+fn interrupt_request() -> Request {
+    Request::Stop(MessageScope::Last)
+}
+
+/// `stop`'s flow-control request: `CANCEL self` ends the running message and, as the protocol
+/// has it, "stops as yet unspoken output messages as well".
+fn stop_request() -> Request {
+    Request::Cancel(MessageScope::Last)
+}
+
 /// Maps the pitch multiplier 0.5..=2.0 around its normal 1.0, not linearly through the range:
 /// half pitch reaches SSIP's -100, double pitch its +100, and normal its 0.
 fn ssip_pitch(pitch: f32) -> i8 {
@@ -1139,6 +1170,15 @@ mod tests {
         assert_eq!(ssip_volume(0.0), -100);
         assert_eq!(ssip_volume(0.5), 0);
         assert_eq!(ssip_volume(1.0), 100);
+    }
+
+    #[test]
+    fn stop_cancels_the_queue_while_an_interrupt_stops_the_running_one() {
+        // `STOP self` reaches only the message being spoken; `CANCEL self` is the one that
+        // clears this client's queue, so `stop` takes it and `interrupt` does not.
+        assert_eq!(interrupt_request(), Request::Stop(MessageScope::Last));
+        assert_eq!(stop_request(), Request::Cancel(MessageScope::Last));
+        assert_eq!(MessageScope::Last.to_string(), "self");
     }
 
     #[test]

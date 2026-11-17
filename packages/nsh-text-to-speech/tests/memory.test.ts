@@ -103,6 +103,11 @@ test("init and synthesize answer the scripts", async () => {
   expect((await working.synthesize("Hello")).length).toBeGreaterThan(0);
 });
 
+test("a scripted voices failure rejects with its code and status", async () => {
+  const backend = memoryBackend({ voicesError: { code: "ERR_TTS_BACKEND", status: 500 } });
+  await expect(backend.voices()).rejects.toMatchObject({ code: "ERR_TTS_BACKEND", status: 500 });
+});
+
 test("the counters and last values record what reached the backend", async () => {
   const backend = memoryBackend();
   backend.speak("Hello", true, () => {});

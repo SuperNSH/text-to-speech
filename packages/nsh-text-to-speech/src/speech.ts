@@ -166,7 +166,11 @@ export class Speech {
     await this.settle(() => this.backend.setLanguage(language));
   }
 
-  /** Sets the voice of later utterances. An unknown or uninstalled voice rejects with `ERR_TTS_VOICE_NOT_FOUND`. */
+  /**
+   * Sets the voice of later utterances. An unknown or uninstalled voice rejects with
+   * `ERR_TTS_VOICE_NOT_FOUND`; a voice list the platform failed to give rejects with its own
+   * error. Either way the platform's synthesizer is not asked.
+   */
   async setVoice(voiceId: string): Promise<void> {
     const voices = await this.settle(() => this.backend.voices());
     const voice = voices.find((candidate) => candidate.id === voiceId);
@@ -199,23 +203,24 @@ export class Speech {
 
   /** The voices the device offers; an empty list when the platform gives none. */
   voices(): Promise<Voice[]> {
-    return this.settle(() => this.backend.voices());
+    return this.quietList(() => this.backend.voices());
   }
 
   /** The installed engines; desktops and Apple report one. */
   engines(): Promise<Engine[]> {
-    return this.settle(() => this.backend.engines());
+    return this.quietList(() => this.backend.engines());
   }
 
   /** The languages a voice exists for, as BCP 47 tags. */
   languages(): Promise<string[]> {
-    return this.settle(() => this.backend.languages());
+    return this.quietList(() => this.backend.languages());
   }
 
-  /** Whether a voice exists for `language`. */
+  /** Whether a voice exists for `language`; the case does not matter, as BCP 47 has it. */
   async isLanguageAvailable(language: string): Promise<boolean> {
     const languages = await this.languages();
-    return languages.includes(language);
+    const wanted = language.toLowerCase();
+    return languages.some((listed) => listed.toLowerCase() === wanted);
   }
 
   /** The longest text the platform accepts; `null` when it reports no limit. */
@@ -229,6 +234,15 @@ export class Speech {
       return await call();
     } catch (error) {
       throw asSpeechError(error);
+    }
+  }
+
+  /** Runs one list query; a list the platform failed to give reads as an empty one, not a fault. */
+  private async quietList<T>(call: () => Promise<T[]>): Promise<T[]> {
+    try {
+      return await this.settle(call);
+    } catch {
+      return [];
     }
   }
 

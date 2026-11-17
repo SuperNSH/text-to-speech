@@ -40,7 +40,8 @@ pub trait Backend: Send + Sync {
         on_event: EventSink,
     ) -> BackendFuture<'_, Result<Option<u64>, SpeechError>>;
 
-    /// Cancels the running utterance; its sink gets a `cancel` event. Queued utterances are kept.
+    /// Cancels the running utterance and every queued one: each sink gets exactly one `cancel`
+    /// event, the running first, then the queue in order. Nothing starts after.
     fn stop(&self) -> BackendFuture<'_, Result<(), SpeechError>>;
 
     /// Pauses the running utterance at its next opportunity.

@@ -162,8 +162,9 @@ impl Speech {
         self.lock_state().await_completion = wait;
     }
 
-    /// Cancels the running utterance; its events end with `cancel`, and its awaited `speak`
-    /// resolves `ERR_TTS_CANCELLED` exactly once. A queued utterance still runs next.
+    /// Cancels the running utterance and every queued one. Each settles with one `cancel`
+    /// event; an awaited `speak` of any of them resolves `ERR_TTS_CANCELLED` exactly once.
+    /// Nothing speaks after.
     pub async fn stop(&self) -> Result<(), SpeechError> {
         self.lock_state().paused = false;
         self.shared.backend.stop().await
@@ -223,14 +224,14 @@ impl Speech {
     }
 
     /// Sets the voice of later utterances. An unknown id, or a voice that is not installed,
-    /// gets `ERR_TTS_VOICE_NOT_FOUND`; the platform is not asked.
+    /// gets `ERR_TTS_VOICE_NOT_FOUND`; a voice list the platform failed to give rejects with
+    /// its own error. Either way the platform's synthesizer is not asked.
     pub async fn set_voice(&self, id: &str) -> Result<(), SpeechError> {
         let installed = self
             .shared
             .backend
             .voices()
-            .await
-            .unwrap_or_default()
+            .await?
             .into_iter()
             .any(|voice| voice.installed && voice.id == id);
         if !installed {
