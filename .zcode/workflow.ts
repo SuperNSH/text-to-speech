@@ -1,6 +1,8 @@
 // Plan for Text to speech in this repo. Phases run in order for each area:
 // implement, audit, unit tests, device test, vision, smoke.
 // Gates on every area: cargo fmt --check, cargo clippy -D warnings, cargo test.
+// device-test, vision and smoke stay blocked: CI has no device or browser
+// runner, and the vision and smoke gates were never built.
 
 export type Phase = "implement" | "audit" | "unit-tests" | "device-test" | "vision" | "smoke";
 
@@ -22,12 +24,12 @@ export const workflow = {
       name: "text-to-speech",
       phases: ["implement", "audit", "unit-tests", "device-test", "vision", "smoke"],
       status: {
-        "implement": "not-started",
-        "audit": "not-started",
-        "unit-tests": "not-started",
-        "device-test": "not-started",
-        "vision": "not-started",
-        "smoke": "not-started",
+        "implement": "done",
+        "audit": "done",
+        "unit-tests": "done",
+        "device-test": "blocked",
+        "vision": "blocked",
+        "smoke": "blocked",
       },
     },
   ] satisfies Area[],

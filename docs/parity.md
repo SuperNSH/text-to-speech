@@ -4,15 +4,16 @@ The `flutter_tts` names come from `.refs/flutter_tts/lib/flutter_tts.dart` and t
 
 ## Capability status
 
-Each row names the CI gate that proves it, from the jobs this workflow configures in `.github/workflows/ci.yml`. Every gate is green on `master` (run 44043490843, commit `7bcdef8`).
+Each row names the CI gate that proves it, from the jobs in `.github/workflows/ci.yml`. That pipeline was rewritten — the typescript job grew the demo, the cross job grew two targets, and the demo, publish and pages jobs are new — so a row counts as verified only after its gate has a green run on `master`.
 
 | Capability | Gate that proves it | Status |
 |---|---|---|
-| Rust crate: clippy clean, suite green on Linux, macOS and Windows | rust matrix: `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` | verified (run 44043490843) |
-| Apple, Android and wasm bridges compile | cross job: clippy for `aarch64-apple-ios`, `aarch64-linux-android`, `wasm32-unknown-unknown` | verified (run 44043490843) |
-| TS package: type-checks, builds with no warning, suite green | typescript job: `nsh check`, `nsh build`, `nsh test` | verified (run 44043490843) |
-| Workspace formatting | format job: `cargo fmt --all -- --check` | verified (run 44043490843) |
-| The speech behaviors in the tables below | the named tests, in `cargo test -p nsh-text-to-speech` and `nsh test` | verified (run 44043490843) |
+| Rust crate: clippy clean, suite green on Linux, macOS and Windows | rust matrix: `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` | unverified under the new pipeline |
+| Apple, iOS-simulator, Android and wasm bridges compile; the unsupported-target path compiles for wasip1 | cross job: clippy for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `aarch64-linux-android`, `wasm32-unknown-unknown`, `wasm32-wasip1` | unverified under the new pipeline |
+| TS package and demo app: type-check, build with no warning, suites green | typescript job: `nsh check`, `nsh build`, `nsh test` for `packages/nsh-text-to-speech` and `examples/demo` | unverified under the new pipeline |
+| Workspace formatting | format job: `cargo fmt --all -- --check` | unverified under the new pipeline |
+| The speech behaviors in the tables below | the named tests, in `cargo test -p nsh-text-to-speech` and `nsh test` | unverified under the new pipeline |
+| The demo builds on nine platforms, the `latest` release carries them, the web demo serves from Pages | demo, publish and pages jobs, on pushes to `master` only | unverified under the new pipeline |
 | Audio out of a real speaker | none: CI has no device or browser runner | not provable in this CI |
 
 ## Status words
@@ -27,20 +28,20 @@ Each row names the CI gate that proves it, from the jobs this workflow configure
 |---|---|---|---|---|
 | `speak(text)` | `Speech::speak(text, interrupt)` | `speech.speak(text, interrupt?)` | Done. The Android `focus` flag is not taken; NSH apps own audio focus | `speaks_and_finishes_once`; `speak_queues_while_speaking`; `speak_interrupts_current_utterance` |
 | `pause()` | `Speech::pause()` | `speech.pause()` | Done | `pause_and_resume_round_trip` |
-| `stop()` | `Speech::stop()` | `speech.stop()` | Done. The running utterance's awaited `speak` resolves `Cancelled` exactly once | `stop_cancels_awaited_speak_once` |
+| `stop()` | `Speech::stop()` | `speech.stop()` | Done. Cancels the running utterance and the queued ones; each awaited `speak` resolves `Cancelled` exactly once | `stop_cancels_awaited_speak_once`; `stop_clears_the_queue` |
 | `synthesizeToFile(text, fileName)` | `Speech::synthesize(text)` | `speech.synthesize(text)` | Mapped. Returns the WAV bytes; the app writes the file, so the library needs no path permission. Android and iOS only in flutter_tts; here it is every platform whose engine synthesizes | `synthesize_returns_wav_bytes`; `concurrent_synthesize_reports_busy` |
 | `setLanguage(language)` | `set_language(tag)` | `setLanguage(tag)` | Done. Empty tag is `InvalidArgument` | `set_language_rejects_empty`; `unknown_language_reports_unavailable` |
 | `setSpeechRate(rate)` | `set_speech_rate(rate)` | `setSpeechRate(rate)` | Done, 0.0..=1.0 | `set_rate_rejects_out_of_range` |
 | `setVolume(volume)` | `set_volume(volume)` | `setVolume(volume)` | Done, 0.0..=1.0 | `set_volume_rejects_out_of_range` |
 | `setPitch(pitch)` | `set_pitch(pitch)` | `setPitch(pitch)` | Done, 0.5..=2.0, 1.0 normal | `set_pitch_rejects_out_of_range` |
-| `setVoice(voice)` | `set_voice(id)` | `setVoice(id)` | Done. Takes a voice id from `voices()`, not flutter_tts's name-plus-locale map | `set_unknown_voice_reports_voice_not_found`; `uninstalled_voice_reports_voice_not_found` |
+| `setVoice(voice)` | `set_voice(id)` | `setVoice(id)` | Done. Takes a voice id from `voices()`, not flutter_tts's name-plus-locale map; a failed `voices()` list answers the backend error, not `VoiceNotFound` | `set_unknown_voice_reports_voice_not_found`; `uninstalled_voice_reports_voice_not_found`; `set_voice_propagates_a_failed_voice_list` |
 | `clearVoice()` | none | none | Out of scope. `Speech` sets a voice by id and has no clear-to-default call; the platform's default voice is what speaks until `set_voice` picks one | none |
 | `getLanguages` | `languages()` | `languages()` | Done | `unknown_language_reports_unavailable` |
 | `getVoices` | `voices()` | `voices()` | Done. Empty list, not an error, when there are none | `missing_voice_list_is_empty` |
-| `getEngines` | `engines()` | `engines()` | Done. Android-only in flutter_tts; other platforms answer an empty list | `missing_voice_list_is_empty` (the same empty-list rule) |
+| `getEngines` | `engines()` | `engines()` | Done. Android-only in flutter_tts; non-Android platforms report their one platform engine, `default: true` | `engines_report_what_the_device_has` |
 | `getDefaultEngine` | `engines()` | `engines()` | Mapped. The `Engine` whose `default` is true; one list call answers both | none beyond the list pass-through |
 | `getDefaultVoice` | none | none | Out of scope. `Voice` carries no default flag, so not even `voices()` can name the default; the platform's default voice is what speaks until `set_voice` picks one | none |
-| `isLanguageAvailable(language)` | `is_language_available(tag)` | `isLanguageAvailable(tag)` | Done | `unknown_language_reports_unavailable` |
+| `isLanguageAvailable(language)` | `is_language_available(tag)` | `isLanguageAvailable(tag)` | Done. Case-insensitive, as BCP 47 has it | `unknown_language_reports_unavailable`; `language_matching_ignores_case` |
 | `isLanguageInstalled(language)` | `voices()` | `voices()` | Mapped. A language is installed when a voice for it has `installed: true`; `LanguageMissingData` is the code when the data needs downloading | `uninstalled_voice_reports_voice_not_found` |
 | `areLanguagesInstalled(languages)` | `voices()` | `voices()` | Mapped. The app checks each tag against the same list; a batch helper would be sugar | none beyond the list pass-through |
 | `setSilence(timems)` | `set_silence(ms)` | `setSilence(ms)` | Done. 0 starts the utterance immediately. Android-only in flutter_tts; here it reaches every backend that has the concept | `set_silence_reaches_backend` |
