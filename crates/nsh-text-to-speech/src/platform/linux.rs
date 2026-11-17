@@ -656,7 +656,14 @@ impl Session {
         if outcome.alive && outcome.answer.is_ok() {
             self.speaking = false;
             self.paused = false;
-            for id in self.active.take().into_iter().chain(self.queued.drain(..)) {
+            // Collected first: the drained iterator would hold `self` across `fire`.
+            let cancelled: Vec<_> = self
+                .active
+                .take()
+                .into_iter()
+                .chain(self.queued.drain(..))
+                .collect();
+            for id in cancelled {
                 self.fire(id, UtteranceEventKind::Cancel);
             }
         }
