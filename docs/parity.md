@@ -4,16 +4,16 @@ The `flutter_tts` names come from `.refs/flutter_tts/lib/flutter_tts.dart` and t
 
 ## Capability status
 
-Each row names the CI gate that proves it, from the jobs in `.github/workflows/ci.yml`. That pipeline was rewritten — the typescript job grew the demo, the cross job grew two targets, and the demo, publish and pages jobs are new — so a row counts as verified only after its gate has a green run on `master`.
+Each row names the CI gate that proves it, from the jobs in `.github/workflows/ci.yml`. That pipeline was rewritten — the typescript job grew the demo, the cross job grew two targets, and the demo, publish and pages jobs are new — so a row counts as verified only after its gate has a green run on `master` — run 44100866879 (commit `da4fef0`) is that run.
 
 | Capability | Gate that proves it | Status |
 |---|---|---|
-| Rust crate: clippy clean, suite green on Linux, macOS and Windows | rust matrix: `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` | unverified under the new pipeline |
-| Apple, iOS-simulator, Android and wasm bridges compile; the unsupported-target path compiles for wasip1 | cross job: clippy for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `aarch64-linux-android`, `wasm32-unknown-unknown`, `wasm32-wasip1` | unverified under the new pipeline |
-| TS package and demo app: type-check, build with no warning, suites green | typescript job: `nsh check`, `nsh build`, `nsh test` for `packages/nsh-text-to-speech` and `examples/demo` | unverified under the new pipeline |
-| Workspace formatting | format job: `cargo fmt --all -- --check` | unverified under the new pipeline |
-| The speech behaviors in the tables below | the named tests, in `cargo test -p nsh-text-to-speech` and `nsh test` | unverified under the new pipeline |
-| The demo builds on nine platforms, the `latest` release carries them, the web demo serves from Pages | demo, publish and pages jobs, on pushes to `master` only | unverified under the new pipeline |
+| Rust crate: clippy clean, suite green on Linux, macOS and Windows | rust matrix: `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` | verified (run 44100866879) |
+| Apple, iOS-simulator, Android and wasm bridges compile; the unsupported-target path compiles for wasip1 | cross job: clippy for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `aarch64-linux-android`, `wasm32-unknown-unknown`, `wasm32-wasip1` | verified (run 44100866879) |
+| TS package and demo app: type-check, build with no warning, suites green | typescript job: `nsh check`, `nsh build`, `nsh test` for `packages/nsh-text-to-speech` and `examples/demo` | verified (run 44100866879) |
+| Workspace formatting | format job: `cargo fmt --all -- --check` | verified (run 44100866879) |
+| The speech behaviors in the tables below | the named tests, in `cargo test -p nsh-text-to-speech` and `nsh test` | verified (run 44100866879) |
+| The demo builds on nine platforms, the `latest` release carries them, the web demo serves from Pages | demo, publish and pages jobs, on pushes to `master` only | verified (run 44100866879) |
 | Audio out of a real speaker | none: CI has no device or browser runner | not provable in this CI |
 
 ## Status words

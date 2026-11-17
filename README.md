@@ -119,6 +119,8 @@ On pushes to `master` only, after those jobs:
 - **publish**: replaces the `latest` release with those nine builds — the downloads in [Try the demo](#try-the-demo). The builds are unsigned: macOS and Windows warn before opening them, and the iOS build runs only in the simulator.
 - **pages**: deploys the demo's web build to GitHub Pages at https://supernsh.github.io/text-to-speech/.
 
+Every job was green end to end — publish and Pages included — on `master` (run 44100866879, commit `da4fef0`), so the claims above are verified.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
