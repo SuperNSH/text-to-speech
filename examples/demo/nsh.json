@@ -1,0 +1,8 @@
+{
+  "name": "Text to speech demo",
+  "id": "dev.supernsh.text-to-speech.demo",
+  "version": "0.1.0",
+  "build": 1,
+  "rust": "../../crates/nsh-text-to-speech",
+  "capabilities": {}
+}
