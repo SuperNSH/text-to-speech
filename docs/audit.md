@@ -228,3 +228,7 @@ Re-walked at `ff67c3c`, after the finishing work, by an independent verifier who
 - Gaps 1–12: closed. CI run 44100866879 (`da4fef0`) is green end to end — 21 jobs, publish and Pages included — and the docs-only `44110470920` (`ff67c3c`) is green the same way after one infrastructure-cancelled job was re-run. The `latest` release carries the nine demo builds, the nine stable download URLs answer 200, and Pages serves the web build (its hashed JS and wasm names match the released web tarball of the same run).
 
 Still true and still a limit, by design: no gate plays audio, the android and web mapping tests compile but run nowhere, and the demo builds are unsigned.
+
+## Re-check after the NSH 0.6.0 move, 2026-11-18
+
+Run https://github.com/SuperNSH/text-to-speech/actions/runs/44376397808 (`61afb39`, "build: move to NSH 0.6.0") concluded success: format, rust on ubuntu, macos and windows, all five cross-check targets, typescript, the nine demo builds, publish and pages. Row 126 is now NSH 0.6.0 (`decisions.md` item 1). The 29 edge-case test names were re-checked as present in both suites, and the Rust and TS method lists still match the parity tables. No gaps found; the limits above (no audio, android and web tests compile only, unsigned demo builds) stand.
