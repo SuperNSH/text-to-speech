@@ -214,3 +214,17 @@ Every row that is not Done, plus the gap list, as one-line actions:
 - Row 140: replace or delete the deployed status page — it still says "scaffold"; it goes away naturally when the web demo deploy (gap 3) lands.
 - Rows 142–144 (.zcode): update `.zcode/workflow.ts` statuses to done (or delete the file); treat the draft as history.
 - Gaps 1–12: land `examples/demo` first, then commit the ci.yml rewrite together with the pages.yml/site deletion and a README that describes the demo matrix, the `latest` release, the Pages web demo, and a "Try the demo" table — AGENTS.md counts a claim with no passing run as unverified, so the README must not describe the new jobs before a green run exists.
+
+## Re-audit, 2026-11-18
+
+Re-walked at `ff67c3c`, after the finishing work, by an independent verifier whose gates and GitHub checks were re-run (not trusted from this file). Every row is now Done, Stale-fixed or honestly limited:
+
+- Rows 12–20 (error messages): Stale-fixed — goals.md's Message column is byte-identical to error.rs, and errors.ts carries the same eleven strings.
+- Row 2 (identical behavior): fixed — `stop` cancels the running and every queued utterance in both languages (`stop_clears_the_queue`); language tags match case-insensitively in both (`language_matching_ignores_case`); a failed voice list propagates its error from `set_voice`/`setVoice` in both (`set_voice_propagates_a_failed_voice_list`); and the three list queries answer `[]` on failure in both, folded into `missing_voice_list_is_empty`.
+- Row 3 re-checked: all 29 named edge-case tests exist under identical names in both suites, script-checked.
+- Rows 51, 53, 76: Stale-fixed — goals.md's platform rows and parity.md now state what the bridges do.
+- Row 55: fixed to the extent CI can — the test now compiles (it never had: `unwrap_err` on a non-`Debug` box) and `wasm32-wasip1` joins the cross job, so the unsupported path is compile-checked; it still runs nowhere, as goals.md says.
+- Rows 135, 140, 142–144: Stale-fixed — the README lists what exists, the status page is gone from the repo and from Pages, and `.zcode/` states the truth.
+- Gaps 1–12: closed. CI run 44100866879 (`da4fef0`) is green end to end — 21 jobs, publish and Pages included — and the docs-only `44110470920` (`ff67c3c`) is green the same way after one infrastructure-cancelled job was re-run. The `latest` release carries the nine demo builds, the nine stable download URLs answer 200, and Pages serves the web build (its hashed JS and wasm names match the released web tarball of the same run).
+
+Still true and still a limit, by design: no gate plays audio, the android and web mapping tests compile but run nowhere, and the demo builds are unsigned.
