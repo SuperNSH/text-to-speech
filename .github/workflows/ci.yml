@@ -63,6 +63,28 @@ jobs:
       - run: cargo clippy -p nsh-text-to-speech --all-targets -- -D warnings
       - run: cargo test -p nsh-text-to-speech --all-targets
 
+  # What publish.yml uploads, packaged, built from the package, and installed with `nsh add`.
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - name: Install Linux packages
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - run: scripts/publish-crates.sh verify
+      # Only for a crate with #[native_module]; the NSH releases up to 0.6.1 have no `nsh add`.
+      - name: Install NSH nightly
+        env:
+          NSH_VERSION: nightly
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/SuperNSH/nsh-builds/master/install.sh | sh
+          echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: scripts/check-nsh-add.sh
+
   cross-check:
     name: check (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

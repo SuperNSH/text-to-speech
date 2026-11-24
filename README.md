@@ -4,6 +4,18 @@ Read text aloud on desktop and mobile.
 
 Part of the Native Shell (NSH) capability set. Same layout as the other SuperNSH repos: a Rust crate, docs in `docs/`, CI on GitHub Actions, and a web demo on GitHub Pages at https://supernsh.github.io/text-to-speech/.
 
+## Install
+
+In the app's directory:
+
+```sh
+nsh add nsh-text-to-speech
+```
+
+`nsh add` needs NSH main or the nightly: the 0.6.0 and 0.6.1 releases do not have it. In a Rust app, `cargo add nsh-text-to-speech` works with any of them.
+
+In TSX, import from `nsh-text-to-speech`, `nsh-text-to-speech/rust` and `nsh-text-to-speech/memory`.
+
 ## Status
 
 **Implemented.** `crates/nsh-text-to-speech` (Rust) and `packages/nsh-text-to-speech` (TypeScript) expose one `Speech` type with identical names and behavior: speak with queue or interrupt, pause, resume, stop, synthesize to WAV bytes, list voices, engines and languages, set language, voice, rate, pitch, volume and silence, report utterance events, and fail with stable `ERR_TTS_*` codes. The names follow Flutter's `flutter_tts`; [docs/parity.md](docs/parity.md) maps every reference API.
@@ -35,7 +47,7 @@ Add the crate to `Cargo.toml`:
 
 ```toml
 [dependencies]
-nsh-text-to-speech = { git = "https://github.com/SuperNSH/text-to-speech" }
+nsh-text-to-speech = "0.1"
 ```
 
 ```rust

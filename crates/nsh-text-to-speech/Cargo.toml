@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme = "../../README.md"
+keywords = ["nshm", "nsh", "text-to-speech", "speech", "tts"]
 
 [lib]
 name = "nsh_text_to_speech"

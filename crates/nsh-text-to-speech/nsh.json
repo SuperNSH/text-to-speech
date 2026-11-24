@@ -1,0 +1,8 @@
+{
+  "nsh": ">=0.6",
+  "exports": {
+    "nsh-text-to-speech": "tsx/index.ts",
+    "nsh-text-to-speech/rust": "tsx/rust.ts",
+    "nsh-text-to-speech/memory": "tsx/memory.ts"
+  }
+}

@@ -11,3 +11,7 @@ Hard rules for humans and coding agents in this repo.
 - Every behaviour change needs a test. A test is seen to fail once before it counts.
 - An operation resolves exactly once: success, a coded failure, or a cancel. It never hangs.
 - Status claims in README and docs must match what CI runs. A claim with no passing run is unverified.
+
+## Releasing
+
+Bump the version in `Cargo.toml` and `packages/*/package.json` together, add the CHANGELOG entry, push, then tag `vX.Y.Z`. The Publish crates workflow uploads to crates.io once CI has passed on the tagged commit. A crates.io version cannot be replaced, so push the tag only when the release is final. To retry: `gh workflow run publish.yml -f tag=vX.Y.Z`.
