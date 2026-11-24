@@ -1,11 +1,14 @@
-name: Publish crates
+name: Publish crates (Manual)
 
-# Publishes nsh-text-to-speech to crates.io. Runs on a version tag, or by hand for an existing tag: a
-# rerun uploads only what crates.io does not have. Needs the CARGO_REGISTRY_TOKEN secret.
+# Publishes nsh-text-to-speech to crates.io from an existing tag. changelog-release.yml calls it; by hand it recovers
+# a version that failed halfway: a rerun uploads only what crates.io does not have.
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       tag:
@@ -19,11 +22,10 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag }}
 
 jobs:
   publish:
@@ -32,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ inputs.tag }}
           persist-credentials: false
 
       - name: Check the versions match the tag
@@ -44,37 +46,8 @@ jobs:
             v=$(jq -er .version "$f")
             [ "$v" = "$version" ] || { echo "$f is $v, not $version"; exit 1; }
           done
-          grep -q "^## $version " CHANGELOG.md || { echo "CHANGELOG.md has no $version entry"; exit 1; }
+          grep -qF "## [$version]" CHANGELOG.md || { echo "CHANGELOG.md has no $version entry"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
-
-      # crates.io versions are permanent, so the tagged commit must have passed CI. The tag is often
-      # pushed right after the commit: wait for the run.
-      - name: Wait for CI on this commit
-        timeout-minutes: 120
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          sha=$(git rev-parse HEAD)
-          idle=0
-          while :; do
-            runs=$(gh run list --workflow ci.yml --commit "$sha" --json status,conclusion)
-            if jq -e 'any(.[]; .conclusion == "success")' <<< "$runs" > /dev/null; then
-              echo "CI passed on $sha"
-              exit 0
-            fi
-            if jq -e 'any(.[]; .status != "completed")' <<< "$runs" > /dev/null; then
-              idle=0
-            else
-              idle=$((idle + 1))
-              # No run going: allow two minutes for one to start.
-              if [ "$idle" -ge 4 ]; then
-                echo "CI has not passed on $sha. Run it with: gh workflow run ci.yml --ref $TAG"
-                exit 1
-              fi
-            fi
-            sleep 30
-          done
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:

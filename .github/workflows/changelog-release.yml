@@ -1,0 +1,100 @@
+name: Changelog Release
+
+# A new version heading in CHANGELOG.md on master is a release: this bumps the versions, tags the
+# commit, creates the GitHub release and publishes the crates. The same flow as freeoxide/gpui-query.
+# Run by hand, it finishes whatever of the newest version is missing.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "CHANGELOG.md"
+  workflow_dispatch:
+
+concurrency:
+  group: changelog-release
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      should_publish: ${{ steps.plan.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+
+      - name: Read the version, and what of it exists already
+        id: plan
+        run: |
+          version=$(scripts/release.sh version)
+          scripts/release.sh check "$version"
+          status=0
+          git ls-remote --exit-code origin "refs/tags/v$version" > /dev/null || status=$?
+          case $status in
+            0) tagged=true ;;
+            2) tagged=false ;;
+            *) echo "git ls-remote failed with exit $status"; exit "$status" ;;
+          esac
+          # The tag is made before the crates are published, so a tag does not mean published.
+          status=0
+          scripts/release.sh published "$version" || status=$?
+          case $status in
+            0) should_publish=false ;;
+            1) should_publish=true ;;
+            *) exit "$status" ;;
+          esac
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "tagged=$tagged"
+            echo "should_publish=$should_publish"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Bump, tag and push
+        if: steps.plan.outputs.tagged == 'false'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          scripts/release.sh bump "$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git diff --cached --quiet || git commit -m "chore: release $TAG"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push --atomic origin HEAD:master "$TAG"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          scripts/release.sh notes "$VERSION" > "$RUNNER_TEMP/notes.md"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            body=$(gh release view "$TAG" --json body -q .body)
+            if [ -z "$body" ] || [ "$body" = "See CHANGELOG.md." ]; then gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"; fi
+            exit 0
+          fi
+          args=(--title "Release $TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag)
+          case "$VERSION" in *-*) args+=(--prerelease) ;; esac
+          # README download links point at releases/latest, which stays the demo builds' release.
+          if gh release view latest > /dev/null 2>&1; then args+=(--latest=false); fi
+          gh release create "$TAG" "${args[@]}"
+
+  publish:
+    needs: release
+    # Runs while the newest version is missing from crates.io, and skips once it is there.
+    if: needs.release.outputs.should_publish == 'true'
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+    secrets: inherit
