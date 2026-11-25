@@ -6,7 +6,7 @@ None.
 
 ## Decided
 
-1. **NSH version: 0.7.1, pinned.** `nsh-core = "0.7.0"` (resolved to 0.7.1 in `Cargo.lock`) matches the CLI CI installs (`NSH_VERSION: v0.7.1`), so what CI compiles is what a developer runs. The pin moved from 0.4.0 to 0.5.0 on 2026-11-12, to 0.5.1 on 2026-11-16, to 0.6.0 on 2026-11-18, and to 0.7.1 on 2026-11-25.
+1. **NSH version: 0.7.1, pinned.** `nsh-core = "0.7.1"` matches the CLI CI installs (`NSH_VERSION: v0.7.1`), so what CI compiles is what a developer runs. The pin moved from 0.4.0 to 0.5.0 on 2026-11-12, to 0.5.1 on 2026-11-16, to 0.6.0 on 2026-11-18, and to 0.7.1 on 2026-11-25.
 2. **Library choice: the platform speech engines behind our own `Speech` API, with flutter_tts's names.** flutter_tts and react-native-tts are the API references, tts-rs the per-platform technique reference; no third-party engine is bundled.
 3. **Platforms in scope: apple, android, windows, linux, web.** The five targets the NSH capability set ships; every other target gets `ERR_TTS_NOT_AVAILABLE` through the unsupported backend.
 

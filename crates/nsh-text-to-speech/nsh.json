@@ -1,5 +1,5 @@
 {
-  "nsh": ">=0.7",
+  "nsh": ">=0.7.1",
   "exports": {
     "nsh-text-to-speech": "tsx/index.ts",
     "nsh-text-to-speech/rust": "tsx/rust.ts",

@@ -14,7 +14,7 @@ name = "nsh_text_to_speech"
 path = "src/lib.rs"
 
 [dependencies]
-nsh-core = "0.7.0"
+nsh-core = "0.7.1"
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["sync", "time"] }
 
