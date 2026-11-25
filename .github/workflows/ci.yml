@@ -75,10 +75,10 @@ jobs:
       - name: Install Linux packages
         run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
       - run: scripts/publish-crates.sh verify
-      # Only for a crate with #[native_module]; the NSH releases up to 0.6.1 have no `nsh add`.
-      - name: Install NSH nightly
+      # scripts/check-nsh-add.sh runs `nsh add`, which the NSH 0.6.x releases do not have.
+      - name: Install NSH v0.7.1
         env:
-          NSH_VERSION: nightly
+          NSH_VERSION: v0.7.1
         run: |
           curl -fsSL https://raw.githubusercontent.com/SuperNSH/nsh-builds/master/install.sh | sh
           echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
@@ -131,7 +131,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install NSH
         env:
-          NSH_VERSION: v0.6.0
+          NSH_VERSION: v0.7.1
         run: |
           curl -fsSL https://nsh.dev/install.sh | sh
           echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
@@ -162,7 +162,7 @@ jobs:
       matrix:
         include:
           # Desktop builds come out for the runner's own processor, so each architecture gets its own runner.
-          # NSH's v0.6.0 release ships a prebuilt CLI for every one of them, so all install it the same way.
+          # NSH's v0.7.1 release ships a prebuilt CLI for every one of them, so all install it the same way.
           - { os: macos-latest, target: macos, name: macos-arm64 }
           - { os: macos-15-intel, target: macos, name: macos-x86_64 }
           - { os: ubuntu-latest, target: linux, name: linux-x86_64 }
@@ -197,7 +197,7 @@ jobs:
       - name: Install NSH
         if: runner.os != 'Windows'
         env:
-          NSH_VERSION: v0.6.0
+          NSH_VERSION: v0.7.1
         run: |
           curl -fsSL https://nsh.dev/install.sh | sh
           echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
@@ -206,7 +206,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          NSH_VERSION: v0.6.0
+          NSH_VERSION: v0.7.1
         run: |
           irm https://nsh.dev/install.ps1 | iex
           "$env:LOCALAPPDATA\nsh\bin" | Out-File -FilePath $env:GITHUB_PATH -Append

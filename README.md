@@ -12,7 +12,7 @@ In the app's directory:
 nsh add nsh-text-to-speech
 ```
 
-`nsh add` needs NSH main or the nightly: the 0.6.0 and 0.6.1 releases do not have it. In a Rust app, `cargo add nsh-text-to-speech` works with any of them.
+`nsh add` needs NSH 0.7.0 or later: the 0.6.0 and 0.6.1 releases do not have it. In a Rust app, `cargo add nsh-text-to-speech` pulls in nsh-core 0.7.
 
 In TSX, import from `nsh-text-to-speech`, `nsh-text-to-speech/rust` and `nsh-text-to-speech/memory`.
 
